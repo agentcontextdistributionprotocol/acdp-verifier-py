@@ -1,0 +1,18 @@
+{
+  "@context": [
+    "https://www.w3.org/ns/did/v1"
+  ],
+  "id": "did:web:agents.example.com:test-producer",
+  "verificationMethod": [
+    {
+      "id": "did:web:agents.example.com:test-producer#key-1",
+      "type": "Ed25519VerificationKey2020",
+      "controller": "did:web:agents.example.com:test-producer",
+      "publicKeyMultibase": "z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp"
+    }
+  ],
+  "assertionMethod": [
+    "did:web:agents.example.com:test-producer#key-1"
+  ],
+  "_note": "TEST ONLY - built offline from the sig-001 fixture's public test key (seed = 32 zero bytes)."
+}

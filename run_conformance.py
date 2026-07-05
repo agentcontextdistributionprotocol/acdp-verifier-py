@@ -40,6 +40,7 @@ from acdp_verifier.base58 import b58decode, b58encode
 from acdp_verifier.errors import (
     AcdpError,
     HashMismatch,
+    SchemaViolation,
     InvalidLogProof,
     InvalidReceipt,
     InvalidSignature,
@@ -1173,11 +1174,11 @@ def run_body(fixture: JsonObj, ctx: SpecContext) -> None:
 
     def call() -> None:
         if not validation.HOSTNAME_RE.match(origin):
-            raise validation.SchemaViolation(
+            raise SchemaViolation(
                 f"origin_registry is not a bare hostname: {origin!r}"
             )
         if validation.ctx_id_authority(ctx_id) != origin:
-            raise validation.SchemaViolation("origin_registry != ctx_id authority")
+            raise SchemaViolation("origin_registry != ctx_id authority")
 
     expected = fixture["expected"]
     if expected["outcome"] == "accept":
@@ -1245,14 +1246,14 @@ def run_pub_004_005(fixture: JsonObj, ctx: SpecContext) -> None:
 def _check_location_roundtrip(location: str, ctx_id: str) -> None:
     prefix = "/contexts/"
     if not location.startswith(prefix):
-        raise validation.SchemaViolation(f"Location does not start with {prefix}")
+        raise SchemaViolation(f"Location does not start with {prefix}")
     payload = location[len(prefix) :]
     if "/" in payload:
-        raise validation.SchemaViolation(
+        raise SchemaViolation(
             "Location ctx_id payload must be a single percent-encoded path segment"
         )
     if unquote(payload) != ctx_id:
-        raise validation.SchemaViolation(
+        raise SchemaViolation(
             f"Location decodes to {unquote(payload)!r}, body.ctx_id is {ctx_id!r}"
         )
 
@@ -1270,11 +1271,11 @@ def run_pub_007(fixture: JsonObj, ctx: SpecContext) -> None:
     for field in forbidden:
         polluted = dict(body)
         polluted[field] = "x"
-        expect_code(
-            lambda p=polluted: validation.validate_publish_response(p),
-            "schema_violation",
-            f"pub-007 forbidden field {field}",
-        )
+
+        def _validate(p: JsonObj = polluted) -> None:
+            validation.validate_publish_response(p)
+
+        expect_code(_validate, "schema_violation", f"pub-007 forbidden field {field}")
     check(body["status"] == "active", "status must be 'active' on fresh publish")
     check(body["version"] == 1, "version must be 1 on first publish")
     # NOTE (spec inconsistency, documented in the README): the scenario's
@@ -1286,11 +1287,11 @@ def run_pub_007(fixture: JsonObj, ctx: SpecContext) -> None:
     for name, bad in scenario["negative_examples"].items():
         if name == "note":
             continue
-        expect_code(
-            lambda b=bad: _check_location_roundtrip(b, body["ctx_id"]),
-            "schema_violation",
-            f"pub-007 negative Location {name}",
-        )
+
+        def _roundtrip(location: str = bad) -> None:
+            _check_location_roundtrip(location, body["ctx_id"])
+
+        expect_code(_roundtrip, "schema_violation", f"pub-007 negative Location {name}")
 
 
 def run_schema_generic(fixture: JsonObj, ctx: SpecContext) -> None:
