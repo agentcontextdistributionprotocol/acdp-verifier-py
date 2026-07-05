@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "acdp-verifier"
+version = "0.1.0"
+description = "Independent Python implementation of the ACDP verification core (second implementation for spec Final promotion)"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11"
+dependencies = [
+    "cryptography>=42.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "mypy>=1.10"]
+
+[tool.setuptools.packages.find]
+include = ["acdp_verifier*"]
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+files = ["acdp_verifier", "run_conformance.py", "interop_check.py", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
