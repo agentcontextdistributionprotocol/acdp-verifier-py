@@ -76,8 +76,16 @@ def verify_head_receipt(
     except SchemaViolation as exc:
         raise InvalidReceipt(str(exc)) from exc
 
-    # Step 2 — recompute preimage, verify signature.
-    computed_hash = verify_signature_envelope(receipt, public_key=registry_public_key)
+    # Step 2 — recompute preimage, verify signature. Any failure is a
+    # verification failure of the head receipt (invalid_receipt category).
+    try:
+        computed_hash = verify_signature_envelope(
+            receipt, public_key=registry_public_key
+        )
+    except InvalidReceipt:
+        raise
+    except Exception as exc:
+        raise InvalidReceipt(f"head-receipt signature failure: {exc}") from exc
 
     # Step 3 — registry binding.
     registry_did = str(receipt["registry_did"])

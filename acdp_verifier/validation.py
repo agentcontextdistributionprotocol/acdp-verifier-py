@@ -38,6 +38,7 @@ __all__ = [
     "metadata_depth",
     "validate_body",
     "validate_capabilities",
+    "validate_data_period",
     "validate_data_ref",
     "validate_error_envelope",
     "validate_metadata",
@@ -144,7 +145,7 @@ def validate_signature_object(sig: Any, where: str = "signature") -> None:
         )
 
 
-def _validate_data_period(value: Any) -> None:
+def validate_data_period(value: Any) -> None:
     if not isinstance(value, Mapping):
         raise _fail("data_period is not an object")
     extra = set(value.keys()) - {"start", "end"}
@@ -446,7 +447,7 @@ def _validate_producer_fields(body: Mapping[str, Any], where: str) -> None:
             raise _fail(f"{where}.tags entries must be unique")
 
     if "data_period" in body:
-        _validate_data_period(body["data_period"])
+        validate_data_period(body["data_period"])
     if "expires_at" in body:
         expires_at = body["expires_at"]
         if not isinstance(expires_at, str) or not is_rfc3339_utc(expires_at):

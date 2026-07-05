@@ -146,7 +146,16 @@ def verify_receipt(
     _validate_receipt_shape(receipt)
 
     # Step 1 — recompute the preimage and verify the registry signature.
-    computed_hash = verify_signature_envelope(receipt, public_key=registry_public_key)
+    # A failure of ANY step is a verification failure of the receipt and is
+    # surfaced with the invalid_receipt category (RFC-ACDP-0010 §8).
+    try:
+        computed_hash = verify_signature_envelope(
+            receipt, public_key=registry_public_key
+        )
+    except InvalidReceipt:
+        raise
+    except Exception as exc:
+        raise InvalidReceipt(f"receipt signature failure: {exc}") from exc
 
     # Step 2 — registry binding.
     registry_did = str(receipt["registry_did"])
