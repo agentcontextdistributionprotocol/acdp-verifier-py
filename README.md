@@ -2,15 +2,15 @@
 
 An **independent Python implementation of the ACDP verification core** — the
 second implementation required by the spec's RELEASE.md to promote the ACDP
-0.2.0/0.3.0 Draft surfaces (RFC-ACDP-0010/0011/0012/0014, `did:key`, the
-divergence corpus) to Final. The first implementation is
+0.2.0/0.3.0/0.4.0 Draft surfaces (RFC-ACDP-0010/0011/0012/0014/0015, `did:key`,
+the divergence corpus) to Final. The first implementation is
 [`acdp-rs`](../acdp-rs); the Python/Node bindings there wrap the same Rust
 core and therefore do not count as independent.
 
 ## Independence claim
 
 This codebase was implemented **from the RFC texts and JSON schemas only**
-(`rfcs/RFC-ACDP-0001/0002/0007/0010/0011/0012/0014`, `schemas/json/*`,
+(`rfcs/RFC-ACDP-0001/0002/0007/0010/0011/0012/0014/0015`, `schemas/json/*`,
 and the conformance fixtures' pinned *expectations* under
 `schemas/conformance/`). No algorithmic code was read from, ported from, or
 shared with `acdp-rs`, and nothing shells out to any Rust binary. The two
@@ -36,6 +36,7 @@ pluggable-store pattern RFC-ACDP-0001 §5.11 recommends).
 | `acdp_verifier.headreceipt` | Lineage-head receipts, all §7 steps incl. 5b and the future-`as_of` skew check (RFC-ACDP-0011) |
 | `acdp_verifier.translog` | RFC 6962 leaf/node hashing (`0x00`/`0x01` domain separation), Merkle roots, inclusion/consistency proof generation and §9 verification folding, checkpoint verification (RFC-ACDP-0012) |
 | `acdp_verifier.revocation` | `key-revocation` shape (§4), not-self-signed rule (§5), compromise-boundary semantics (§7) (RFC-ACDP-0014) |
+| `acdp_verifier.cosignature` | Witness cosignatures: closed `acdp-log-cosignature` object (§4), the §5 signing construction (reused from `receipts`, keyed by the witness), the §8 consumer procedure (closed parse, witness-key signature, witness binding, checkpoint binding, `witnessed_at` skew), and §8 N-witnessed quorum evaluation (RFC-ACDP-0015) |
 | `acdp_verifier.validation` | Structural validation: publish requests/bodies, the DataRef §6.6 checklist, metadata limits, capabilities §3.5 checklist (incl. the 0.3.0 idem-007 cross-field rule and caps-007), status pattern, closed-schema and absent-vs-null rules |
 | `acdp_verifier.verify` | The strict §5.11 pipeline: schema → hash recompute → key binding → resolution → signature |
 
@@ -61,12 +62,24 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
     --did-doc samples/test-producer-did.json
 ```
 
-Current conformance status: **81 in-scope fixtures PASS, 0 FAIL, 54 SKIP
-(explicit out-of-scope markers), 135 total** — including every golden vector
+Current conformance status: **85 in-scope fixtures PASS, 0 FAIL, 54 SKIP
+(explicit out-of-scope markers), 139 total** — including every golden vector
 (`sig-001/002/003`, `can-001..012`, `lin-001`, `fp-001`, `rcpt-001..004`,
-`rot-001`, `rev-001/002`, `lhr-001..004`, `log-001..004`) and the
-end-to-end verification of `examples/retrieval/golden-context.json` and
+`rot-001`, `rev-001/002`, `lhr-001..004`, `log-001..004`, `wit-001..004`) and
+the end-to-end verification of `examples/retrieval/golden-context.json` and
 `golden-context-with-receipt.json`.
+
+The witness-cosigning family (`wit-*`, RFC-ACDP-0015) is executed, not merely
+scenario-asserted: `wit-001`/`wit-003` re-derive each witness public key from
+its seed, recompute the JCS preimage/hash, re-mint the Ed25519 signature and
+byte-compare it against the pinned golden values, then run the full §8
+consumer procedure and N-witnessed count; `wit-002` reuses the genuine
+`log-003` `PROOF(3, D[5])` to show the §7-step-2 consistency check *fails*
+against the rewritten root yet *succeeds* against the genuine one (the refusal
+gate is real, not a blanket reject); `wit-004` resolves witness A's
+`assertionMethod` key from a real DID document and confirms the wrong-key
+signature fails with `invalid_witness_cosignature`, while witness A's correct
+golden signature over the same body verifies.
 
 ## Dependency choices
 
@@ -123,6 +136,25 @@ end-to-end verification of `examples/retrieval/golden-context.json` and
 
 None of these affect any golden hash, signature, or Merkle value — every
 cryptographic vector reproduced byte-for-byte on both implementations.
+
+**No divergence was found in RFC-ACDP-0015 (witness cosigning).** Implemented
+from the RFC text, `acdp-log-cosignature.schema.json`, and the `wit-001..004`
+fixtures, every pinned value reproduced exactly and independently:
+
+- `wit-001` canonical preimage
+  `{"cosignature_version":"acdp-cosig/1","witness_id":"did:web:witness.example.org","witnessed_at":"2026-07-04T12:00:05.000Z","witnessed_checkpoint":{"log_id":"did:web:registry.example.com/log/1","root_hash":"sha256:0b5978172c671ca050b44790a749b18fc29d58a7a17495fbb4e0f86eb885f731","timestamp":"2026-07-04T12:00:00.000Z","tree_size":5}}`;
+- cosignature hash `sha256:70f416e2ea52df79aeffb09f6e7bb0ff7ef85105ec73f1e3abefeeda7373edf0`;
+- witness A public key `17cb79fb2b4120f2b1ec65e4198d6e08b28e813feb01e4a400839b85e18080ce` (derived from seed `0x33`×32);
+- signature `omUcflbxeirUvPyIbuiGW0t7fch/xO2lSzTQwAvOAqsawocn4Y5J69Nwracq1I2Zercj5Qdnlc18NZQyoPcEBA==`
+  (hex `a2651c7e…a0f70404`).
+
+`wit-003`'s witness B (seed `0x44`×32) reproduced its pinned key
+`d759793b…`, hash `sha256:16c89fdb…`, and signature
+`RYgjh3FYtkr…UnQyDA==`; and `wit-004`'s deliberately-wrong signature
+`q904p7Ys…a31SBQ==` is exactly witness B's signature over witness A's hash
+`sha256:70f416…`, which correctly fails to verify under witness A's key. The
+witness layer chains cleanly onto the `log-001`/`log-003` golden checkpoints
+with no contradiction between prose, schema, and fixtures.
 
 ## License
 
