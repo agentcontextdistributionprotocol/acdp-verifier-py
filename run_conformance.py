@@ -25,6 +25,7 @@ from typing import Any, Callable, Mapping
 from urllib.parse import unquote
 
 from acdp_verifier import (
+    cosignature,
     didkey,
     hashing,
     headreceipt,
@@ -44,6 +45,7 @@ from acdp_verifier.errors import (
     InvalidLogProof,
     InvalidReceipt,
     InvalidSignature,
+    InvalidWitnessCosignature,
     KeyNotAuthorized,
     KeyResolutionFailed,
 )
@@ -1090,6 +1092,307 @@ def run_log_004(fixture: JsonObj, ctx: SpecContext) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Transparency-log witness cosigning (wit-*, RFC-ACDP-0015)
+# ---------------------------------------------------------------------------
+
+
+def _log001_checkpoint_tuple(ctx: SpecContext) -> JsonObj:
+    """The log-001 golden checkpoint's identity tuple (the cosigned material)."""
+    checkpoint = ctx.fixture("log-001")["vectors"][0]["expected"]["log_checkpoint"]
+    return {
+        "log_id": checkpoint["log_id"],
+        "tree_size": checkpoint["tree_size"],
+        "root_hash": checkpoint["root_hash"],
+    }
+
+
+def _sign_cosignature(unsigned: JsonObj, seed: bytes, witness_id: str) -> JsonObj:
+    """Re-mint a signed cosignature object from its unsigned form and a seed."""
+    got_hash = cosignature.cosignature_hash(unsigned)
+    sig = signing.sign_ed25519(seed, got_hash)
+    signed = dict(unsigned)
+    signed["signature"] = {
+        "algorithm": "ed25519",
+        "key_id": f"{witness_id}#witness-key-1",
+        "value": base64.b64encode(sig).decode(),
+    }
+    return signed
+
+
+def run_wit_001(fixture: JsonObj, ctx: SpecContext) -> None:
+    """EXECUTED — golden cosignature vector (RFC-ACDP-0015 §4–§5, §8)."""
+    keypair = fixture["witness_test_keypair"]
+    seed = bytes.fromhex(keypair["private_seed_hex"])
+    public = bytes.fromhex(keypair["public_key_hex"])
+    # Re-derive the witness public key from the seed and byte-compare (golden).
+    check(
+        signing.ed25519_public_key_from_seed(seed) == public,
+        "witness public key does not derive from the pinned seed",
+    )
+    vector = fixture["vectors"][0]
+    unsigned = vector["cosignature_unsigned"]
+    expected = vector["expected"]
+    witness_id = str(unsigned["witness_id"])
+
+    # 1: JCS canonical form of the unsigned cosignature, byte-for-byte.
+    canonical = jcs.dumps(unsigned)
+    check(canonical == expected["canonical_form"], "cosignature canonical form diverged")
+
+    # 2: cosignature hash.
+    got_hash = hashing.sha256_prefixed(canonical.encode("utf-8"))
+    check(got_hash == expected["cosignature_hash"], "cosignature hash diverged")
+    check(got_hash == expected["signature_input"], "signature input != cosignature hash string")
+    check(cosignature.cosignature_hash(unsigned) == got_hash, "module hash diverged")
+
+    # 3: re-mint the Ed25519 signature over the ASCII hash and byte-compare.
+    sig = signing.sign_ed25519(seed, got_hash)
+    check(sig.hex() == expected["signature_value_hex"], "re-minted signature hex diverged")
+    check(
+        base64.b64encode(sig).decode() == expected["signature_value_base64"],
+        "re-minted signature base64 diverged",
+    )
+    signing.verify_ed25519(public, got_hash, sig)
+
+    # 4-7: full §8 consumer verification against the log-001 checkpoint tuple.
+    signed = expected["log_cosignature"]
+    checkpoint = _log001_checkpoint_tuple(ctx)
+    check(
+        signed["witnessed_checkpoint"]["log_id"] == checkpoint["log_id"]
+        and signed["witnessed_checkpoint"]["tree_size"] == checkpoint["tree_size"]
+        and signed["witnessed_checkpoint"]["root_hash"] == checkpoint["root_hash"],
+        "cosignature does not chain to the log-001 golden checkpoint",
+    )
+    result = cosignature.verify_cosignature(
+        signed,
+        checkpoint=checkpoint,
+        witness_public_key=public,
+        trusted_witnesses=[witness_id],
+        consumer_clock=parse_rfc3339(str(unsigned["witnessed_at"])),
+    )
+    check(result.cosignature_hash == got_hash, "verified hash diverged")
+    check(result.witness_id == witness_id, "verified witness_id diverged")
+
+    # §8 N-witnessed: exactly one distinct trusted witness.
+    quorum = cosignature.evaluate_quorum(
+        [signed],
+        checkpoint=checkpoint,
+        witness_public_keys={witness_id: public},
+        trusted_witnesses=[witness_id],
+        consumer_clock=parse_rfc3339(str(unsigned["witnessed_at"])),
+    )
+    eq = fixture["expected_quorum"]
+    check(
+        quorum.witnessed_count == int(eq["witnessed_count"]) == 1,
+        f"quorum count {quorum.witnessed_count} != expected 1",
+    )
+    check(
+        quorum.witnessed_tuple == (eq["log_id"], int(eq["tree_size"]), eq["root_hash"]),
+        "quorum tuple diverged",
+    )
+
+
+def run_wit_002(fixture: JsonObj, ctx: SpecContext) -> None:
+    """EXECUTED-via-scenario — consistency refusal (RFC-ACDP-0015 §7 step 2).
+
+    The witness holds the genuine log-003 size-3 retained head; a size-5
+    checkpoint with a REWRITTEN root is presented. Using the genuine
+    PROOF(3, D[5]) from log-003, we show the §9.2 consistency check fails
+    against the rewritten root (so the witness MUST refuse), yet succeeds
+    against the genuine root (so the gate is real, not a blanket reject).
+    """
+    scenario = fixture["scenario"]
+    expected = fixture["expected"]
+    retained = scenario["retained_head"]
+    presented = scenario["presented_checkpoint"]
+
+    # The genuine consistency proof and roots come from the chained log-003.
+    log003 = ctx.fixture("log-003")["vectors"][0]["expected"]
+    genuine_first_root = translog.parse_hash(log003["first_root_hash"])
+    genuine_second_root = translog.parse_hash(log003["second_root_hash"])
+    path = [
+        translog.parse_hash(p)
+        for p in log003["consistency_proof_response"]["consistency_path"]
+    ]
+
+    # Premise: the retained head is the genuine size-3 root; the presented root
+    # is a fabrication distinct from the genuine size-5 root.
+    check(
+        retained["root_hash"] == log003["first_root_hash"],
+        "wit-002 retained head is not the genuine log-003 size-3 root",
+    )
+    check(
+        presented["root_hash"] != log003["second_root_hash"],
+        "wit-002 premise: presented root must differ from the genuine size-5 root",
+    )
+
+    # §7 step 2 against the REWRITTEN root MUST fail consistency -> refuse.
+    rewritten_second_root = translog.parse_hash(presented["root_hash"])
+    expect_code(
+        lambda: translog.verify_consistency(
+            first=int(retained["tree_size"]),
+            second=int(presented["tree_size"]),
+            consistency_path=path,
+            first_root=genuine_first_root,
+            second_root=rewritten_second_root,
+        ),
+        "invalid_log_proof",
+        "wit-002 rewritten checkpoint must fail consistency from the retained head",
+    )
+
+    # Positive control: the GENUINE size-5 root verifies (the gate is real).
+    translog.verify_consistency(
+        first=int(retained["tree_size"]),
+        second=int(presented["tree_size"]),
+        consistency_path=path,
+        first_root=genuine_first_root,
+        second_root=genuine_second_root,
+    )
+
+    # Scenario assertions (§7): refuse, no cosignature, evidence persisted.
+    check(expected["witness_action"] == "refuse", "scenario: witness must refuse")
+    check(expected["cosignature_emitted"] is False, "scenario: no cosignature emitted")
+    check(expected["evidence_persisted"] is True, "scenario: evidence must be persisted")
+
+    # A consumer therefore sees no cosignature -> the checkpoint stays 0-witnessed.
+    quorum = cosignature.evaluate_quorum(
+        [],
+        checkpoint={
+            "log_id": presented["log_id"],
+            "tree_size": presented["tree_size"],
+            "root_hash": presented["root_hash"],
+        },
+    )
+    check(quorum.witnessed_count == 0, "rewritten checkpoint must be 0-witnessed")
+
+
+def run_wit_003(fixture: JsonObj, ctx: SpecContext) -> None:
+    """EXECUTED — two distinct witnesses -> 2-witnessed (RFC-ACDP-0015 §8)."""
+    checkpoint = _log001_checkpoint_tuple(ctx)
+    signed_cosigs: list[JsonObj] = []
+    witness_keys: dict[str, bytes] = {}
+    for vector in fixture["vectors"]:
+        keypair = vector["witness_test_keypair"]
+        seed = bytes.fromhex(keypair["private_seed_hex"])
+        public = bytes.fromhex(keypair["public_key_hex"])
+        check(
+            signing.ed25519_public_key_from_seed(seed) == public,
+            "wit-003 witness public key does not derive from its seed",
+        )
+        unsigned = vector["cosignature_unsigned"]
+        expected = vector["expected"]
+        witness_id = str(unsigned["witness_id"])
+
+        canonical = jcs.dumps(unsigned)
+        check(canonical == expected["canonical_form"], f"{witness_id}: canonical form diverged")
+        got_hash = hashing.sha256_prefixed(canonical.encode("utf-8"))
+        check(got_hash == expected["cosignature_hash"], f"{witness_id}: hash diverged")
+        sig = signing.sign_ed25519(seed, got_hash)
+        check(sig.hex() == expected["signature_value_hex"], f"{witness_id}: signature hex diverged")
+        check(
+            base64.b64encode(sig).decode() == expected["signature_value_base64"],
+            f"{witness_id}: signature base64 diverged",
+        )
+        signed_cosigs.append(_sign_cosignature(unsigned, seed, witness_id))
+        witness_keys[witness_id] = public
+
+    # Both cosignatures cover ONE tuple but carry DISTINCT witness_id values.
+    tuples = {tuple(c["witnessed_checkpoint"][k] for k in ("log_id", "tree_size", "root_hash")) for c in signed_cosigs}
+    check(len(tuples) == 1, "wit-003: both cosignatures must cover one checkpoint tuple")
+    check(len(witness_keys) == 2, "wit-003: witnesses must be distinct")
+
+    trusted = list(witness_keys)
+    quorum = cosignature.evaluate_quorum(
+        signed_cosigs,
+        checkpoint=checkpoint,
+        witness_public_keys=witness_keys,
+        trusted_witnesses=trusted,
+        consumer_clock=parse_rfc3339("2026-07-04T12:03:00.000Z"),
+    )
+    eq = fixture["expected_quorum"]
+    check(
+        quorum.witnessed_count == int(eq["witnessed_count"]) == 2,
+        f"quorum count {quorum.witnessed_count} != expected 2",
+    )
+    check(quorum.meets(2), "wit-003: a min-witnesses=2 policy must be satisfied")
+
+    # A duplicate cosignature from an already-counted witness does NOT raise N.
+    dup = cosignature.evaluate_quorum(
+        signed_cosigs + [signed_cosigs[0]],
+        checkpoint=checkpoint,
+        witness_public_keys=witness_keys,
+        trusted_witnesses=trusted,
+        consumer_clock=parse_rfc3339("2026-07-04T12:03:00.000Z"),
+    )
+    check(dup.witnessed_count == 2, "duplicate witness must not raise the N-witnessed count")
+
+
+def run_wit_004(fixture: JsonObj, ctx: SpecContext) -> None:
+    """EXECUTED-via-scenario — key mismatch -> invalid_witness_cosignature (§8 step 2)."""
+    cosig = fixture["cosignature"]
+    witness_id = str(cosig["witness_id"])
+    doc = fixture["witness_did_document"]
+    public_a = bytes.fromhex(doc["assertion_method_key_public_hex"])
+    checkpoint = _log001_checkpoint_tuple(ctx)
+
+    # Independent hash cross-check: the body hashes to the pinned value.
+    got_hash = cosignature.cosignature_hash(cosig)
+    check(got_hash == fixture["expected"]["cosignature_hash"], "wit-004 cosignature hash diverged")
+
+    # Resolve witness A's assertionMethod key from a real DID document and
+    # run the full §8 procedure — the wrong-key signature MUST NOT verify.
+    documents = {witness_id: make_did_document(witness_id, "witness-key-1", public_a)}
+    expect_code(
+        lambda: cosignature.verify_cosignature(
+            cosig,
+            checkpoint=checkpoint,
+            did_documents=documents,
+            trusted_witnesses=[witness_id],
+            consumer_clock=parse_rfc3339(str(cosig["witnessed_at"])),
+        ),
+        "invalid_witness_cosignature",
+        "wit-004 wrong-key cosignature",
+    )
+    # Same, resolving with the raw key directly.
+    expect_code(
+        lambda: cosignature.verify_cosignature(
+            cosig, checkpoint=checkpoint, witness_public_key=public_a
+        ),
+        "invalid_witness_cosignature",
+        "wit-004 wrong-key cosignature (raw key)",
+    )
+
+    # Positive control: witness A's CORRECT golden signature (wit-001) over
+    # this exact body DOES verify under the same resolved key.
+    correct_value = ctx.fixture("wit-001")["vectors"][0]["expected"]["log_cosignature"][
+        "signature"
+    ]["value"]
+    check(
+        correct_value != cosig["signature"]["value"],
+        "wit-004 premise: the pinned wrong-key value must differ from the golden value",
+    )
+    good = json.loads(json.dumps(cosig))
+    good["signature"]["value"] = correct_value
+    result = cosignature.verify_cosignature(
+        good,
+        checkpoint=checkpoint,
+        did_documents=documents,
+        trusted_witnesses=[witness_id],
+        consumer_clock=parse_rfc3339(str(cosig["witnessed_at"])),
+    )
+    check(result.witness_id == witness_id, "positive control witness_id diverged")
+
+    # The failing cosignature does NOT count toward N (it stays 0-witnessed).
+    quorum = cosignature.evaluate_quorum(
+        [cosig],
+        checkpoint=checkpoint,
+        did_documents=documents,
+        trusted_witnesses=[witness_id],
+        consumer_clock=parse_rfc3339(str(cosig["witnessed_at"])),
+    )
+    check(quorum.witnessed_count == 0, "wit-004 failing cosignature must not count toward N")
+
+
+# ---------------------------------------------------------------------------
 # Structural families: caps-*, idem-007, status-*, meta-*, body-*,
 # data-ref-*, pub-*, schema-*
 # ---------------------------------------------------------------------------
@@ -1426,6 +1729,10 @@ _EXECUTORS: dict[str, Executor] = {
     "log-002": run_log_002,
     "log-003": run_log_003,
     "log-004": run_log_004,
+    "wit-001": run_wit_001,
+    "wit-002": run_wit_002,
+    "wit-003": run_wit_003,
+    "wit-004": run_wit_004,
     "caps-001": run_caps_simple,
     "caps-002": run_caps_simple,
     "caps-003": run_caps_simple,
