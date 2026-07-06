@@ -20,6 +20,7 @@ __all__ = [
     "KeyNotAuthorized",
     "InvalidReceipt",
     "InvalidLogProof",
+    "InvalidWitnessCosignature",
 ]
 
 
@@ -91,3 +92,16 @@ class InvalidLogProof(AcdpError):
     """Transparency-log proof/checkpoint failure category (RFC-ACDP-0012 §9)."""
 
     code = "invalid_log_proof"
+
+
+class InvalidWitnessCosignature(AcdpError):
+    """Witness-cosignature verification failure (RFC-ACDP-0015 §8, §10).
+
+    A new wire code (HTTP 502) introduced at acdp/0.4.0: closed parse, the
+    witness-key signature, witness binding, checkpoint binding, or the
+    ``witnessed_at`` skew check failed. Deliberately distinct from
+    ``invalid_log_proof`` — it indicts a *witness's* attestation, an
+    independent verdict over an independent signer, not the registry's log.
+    """
+
+    code = "invalid_witness_cosignature"

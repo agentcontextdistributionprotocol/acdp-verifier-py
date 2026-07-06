@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from . import (
     base58,
+    cosignature,
     didkey,
     didweb,
     errors,
@@ -26,6 +27,7 @@ from . import (
 
 __all__ = [
     "base58",
+    "cosignature",
     "didkey",
     "didweb",
     "errors",
