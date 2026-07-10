@@ -19,7 +19,7 @@ jobs:
         python: ["3.11", "3.12", "3.13"]
     steps:
       - name: Check out the verifier
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: acdp-verifier-py
       # The conformance runner reads golden fixtures from the canonical spec
@@ -27,11 +27,11 @@ jobs:
       # re-verifies against the spec's pinned vectors on every push — the whole
       # point of an independent second implementation.
       - name: Check out the ACDP spec
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: agentcontextdistributionprotocol/agentcontextdistributionprotocol
           path: agentcontextdistributionprotocol
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
       - name: Install
