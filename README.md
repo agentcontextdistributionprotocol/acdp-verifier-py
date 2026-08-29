@@ -99,6 +99,24 @@ golden signature over the same body verifies.
   `deterministic_signing=True`), and SHA-256 primitives. Base58-btc,
   multicodec varints, JCS, and all protocol logic are stdlib-only.
 
+## Distribution
+
+**Deliberately not published to PyPI.** This is the ACDP family's independent
+second implementation, not a library to depend on — its value is that it
+re-derives the spec's golden vectors from the RFC texts alone, and a shared
+package would erode exactly that independence. Consume it from a git tag
+(`v0.1.0`) or a checkout:
+
+```bash
+pip install 'acdp-verifier @ git+https://github.com/agentcontextdistributionprotocol/acdp-verifier-py@v0.1.0'
+```
+
+`pyproject.toml` carries the `Private :: Do Not Upload` classifier, and PyPI
+rejects any distribution carrying a `Private ::` classifier — so an accidental
+publish fails at the registry rather than succeeding quietly. If an external
+consumer ever needs a wheel, that is a deliberate reversal: drop the
+classifier and add a tag-triggered publish workflow.
+
 ## Divergences found (the value of a second implementation)
 
 1. **`acdp-data-ref.schema.json` forbids `embedded.content_hash` that the
