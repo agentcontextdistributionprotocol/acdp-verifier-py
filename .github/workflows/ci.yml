@@ -35,7 +35,7 @@ jobs:
           # fixtures — the runner FAILS (never skips) an unregistered
           # fixture, so a new family must land with its executor.
           # (spec main HEAD as of 2026-08-28)
-          ref: 31cf8743b62debe2c7c8572ce3a3a0b7ca5ad099
+          ref: 417211f6a13aeceef4db00eb67f98ed0ed13761b
           path: agentcontextdistributionprotocol
       - uses: actions/setup-python@v6
         with:
