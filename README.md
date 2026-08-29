@@ -1,11 +1,28 @@
 # acdp-verifier-py
 
 An **independent Python implementation of the ACDP verification core** — the
-second implementation required by the spec's RELEASE.md to promote the ACDP
-0.2.0/0.3.0/0.4.0 Draft surfaces (RFC-ACDP-0010/0011/0012/0014/0015, `did:key`,
-the divergence corpus) to Final. The first implementation is
+second implementation required by the spec's RELEASE.md to promote Draft
+surfaces to Final. It served that role for the ACDP 0.2.0/0.3.0 lines
+(RFC-ACDP-0010/0011/0012/0014, `did:key`, the divergence corpus), both now
+Final, and gates the 0.4.0 line today (RFC-ACDP-0015, witness cosigning —
+see "Project status" below). The first implementation is
 [`acdp-rs`](../acdp-rs); the Python/Node bindings there wrap the same Rust
 core and therefore do not count as independent.
+
+## Project status
+
+ACDP is maintained by a single maintainer on a best-effort basis; changes land
+when a consumer needs them, with no SLA. The stable surface is the 0.1.0 /
+0.2.0 / 0.3.0 Final lines, which are wire-frozen. RFC-ACDP-0015 (witness
+cosigning) is Draft on the 0.4.0 line and RFC-ACDP-0009 is Reserved; neither is
+a dependable surface until promoted. Promotion to Final requires the
+conformance pack to pass against two independent implementations (`acdp-rs` and
+`acdp-verifier-py`); the second implementation is therefore part of the
+protocol's governance machinery, not an optional extra. Security reports: see
+SECURITY.md in the org profile.
+
+This repository is that Final-gate second implementation: if it lapses, every
+future promotion stalls.
 
 ## Independence claim
 
