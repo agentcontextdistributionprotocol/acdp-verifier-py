@@ -6,3 +6,13 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+
+# Local /drive session working state — not ACDP protocol artifacts.
+plans/
+PROGRESS.md
+ASSUMPTIONS.md
+DECISIONS.md
+.drive.lock
+
+# macOS Finder metadata.
+.DS_Store
