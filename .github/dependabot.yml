@@ -2,6 +2,11 @@ version: 2
 updates:
   - package-ecosystem: pip
     directory: /
+    # Without this, Dependabot treats an unpinned `>=` floor on an
+    # unpublished-to-PyPI package as a library and skips it as
+    # already-satisfied — zero PRs, ever. `increase` forces the floor
+    # (e.g. cryptography's) up to the latest compatible release instead.
+    versioning-strategy: increase
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
