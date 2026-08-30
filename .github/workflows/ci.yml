@@ -37,7 +37,7 @@ jobs:
           # (spec main HEAD as of 2026-08-29; SPEC-9/SPEC-7 — anc-* family + rev-002 reshape)
           ref: 417211f6a13aeceef4db00eb67f98ed0ed13761b
           path: agentcontextdistributionprotocol
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
       - name: Install
