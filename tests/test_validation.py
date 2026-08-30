@@ -85,6 +85,63 @@ class TestPublishRequest:
             validation.validate_publish_request(req)
 
 
+class TestAnchors:
+    """RFC-ACDP-0016 §4: anchors[] shape checks."""
+
+    def _anchor(self, **overrides: Any) -> dict[str, Any]:
+        anchor = {"scheme": "macp.commitment", "content_hash": "sha256:" + "a" * 64}
+        anchor.update(overrides)
+        return anchor
+
+    def test_well_formed_anchor_accepted(self) -> None:
+        validation.validate_anchor(self._anchor())
+
+    def test_unrecognized_scheme_still_accepted(self) -> None:
+        # RFC-ACDP-0016 §6: scheme is opaque and unenumerated — a verifier
+        # MUST NOT require recognizing it.
+        validation.validate_anchor(self._anchor(scheme="a-scheme.nobody-recognizes"))
+
+    def test_malformed_content_hash_rejected(self) -> None:
+        with pytest.raises(SchemaViolation):
+            validation.validate_anchor(self._anchor(content_hash="not-a-valid-hash"))
+
+    def test_empty_scheme_rejected(self) -> None:
+        with pytest.raises(SchemaViolation):
+            validation.validate_anchor(self._anchor(scheme=""))
+
+    def test_unknown_field_rejected(self) -> None:
+        with pytest.raises(SchemaViolation):
+            validation.validate_anchor(self._anchor(surprise=1))
+
+    def test_missing_field_rejected(self) -> None:
+        with pytest.raises(SchemaViolation):
+            validation.validate_anchor({"scheme": "macp.commitment"})
+
+    def test_empty_anchors_array_rejected(self) -> None:
+        with pytest.raises(SchemaViolation):
+            validation.validate_anchors([])
+
+    def test_anchors_array_of_one_accepted(self) -> None:
+        validation.validate_anchors([self._anchor()])
+
+    def test_publish_request_with_anchors_accepted(self) -> None:
+        req = minimal_request()
+        req["anchors"] = [self._anchor()]
+        validation.validate_publish_request(req)
+
+    def test_publish_request_with_malformed_anchor_rejected(self) -> None:
+        req = minimal_request()
+        req["anchors"] = [self._anchor(content_hash="not-a-valid-hash")]
+        with pytest.raises(SchemaViolation):
+            validation.validate_publish_request(req)
+
+    def test_publish_request_with_empty_anchors_rejected(self) -> None:
+        req = minimal_request()
+        req["anchors"] = []
+        with pytest.raises(SchemaViolation):
+            validation.validate_publish_request(req)
+
+
 class TestDataRef:
     def test_neither_location_nor_embedded(self) -> None:
         with pytest.raises(SchemaViolation):

@@ -36,6 +36,8 @@ __all__ = [
     "ctx_id_authority",
     "decode_embedded_content",
     "metadata_depth",
+    "validate_anchor",
+    "validate_anchors",
     "validate_body",
     "validate_capabilities",
     "validate_data_period",
@@ -314,6 +316,47 @@ def validate_data_ref(ref: Any) -> None:
             )
 
 
+# --- anchors (RFC-ACDP-0016 §4) -----------------------------------------------
+
+_ANCHOR_ALLOWED = frozenset({"scheme", "content_hash"})
+_ANCHOR_REQUIRED = ("scheme", "content_hash")
+
+
+def validate_anchor(anchor: Any) -> None:
+    """Validate a single ``anchors[]`` entry (RFC-ACDP-0016 §4).
+
+    ``scheme`` is an opaque, unenumerated string — a verifier MUST accept a
+    scheme it does not recognize (§6); only the entry's own shape and its
+    ``content_hash``'s acdp-common shape are checked here.
+    """
+    if not isinstance(anchor, Mapping):
+        raise _fail("anchors entry is not an object")
+    extra = set(anchor.keys()) - _ANCHOR_ALLOWED
+    if extra:
+        raise _fail(f"anchors entry is a closed schema; unknown fields: {sorted(extra)}")
+    missing = [field for field in _ANCHOR_REQUIRED if field not in anchor]
+    if missing:
+        raise _fail(f"anchors entry is missing required fields: {missing}")
+    scheme = anchor["scheme"]
+    if not isinstance(scheme, str) or not scheme:
+        raise _fail("anchors entry.scheme must be a non-empty string")
+    content_hash_value = anchor["content_hash"]
+    if not isinstance(content_hash_value, str) or not CONTENT_HASH_RE.match(content_hash_value):
+        raise _fail("anchors entry.content_hash must be 'sha256:<64 lowercase hex>'")
+
+
+def validate_anchors(anchors: Any) -> None:
+    """Validate the ``anchors`` field as a whole (RFC-ACDP-0016 §4).
+
+    ``minItems: 1`` — a producer with no anchors MUST omit the field
+    entirely (absent-when-empty convention), not send ``anchors: []``.
+    """
+    if not isinstance(anchors, list) or len(anchors) < 1:
+        raise _fail("anchors must be a non-empty array when present")
+    for anchor in anchors:
+        validate_anchor(anchor)
+
+
 # --- publish request (acdp-publish-request.schema.json, CLOSED) ---------------
 
 _PUBLISH_REQUIRED = (
@@ -343,6 +386,7 @@ _PUBLISH_ALLOWED = frozenset(
         "metadata",
         "lineage_id",
         "acdp_version",
+        "anchors",
     )
 )
 
@@ -471,6 +515,9 @@ def _validate_producer_fields(body: Mapping[str, Any], where: str) -> None:
         acdp_version = body["acdp_version"]
         if not isinstance(acdp_version, str) or not SEMVER_RE.match(acdp_version):
             raise _fail(f"{where}.acdp_version must match ^\\d+\\.\\d+\\.\\d+$")
+
+    if "anchors" in body:
+        validate_anchors(body["anchors"])
 
 
 def validate_publish_request(request: Any) -> None:

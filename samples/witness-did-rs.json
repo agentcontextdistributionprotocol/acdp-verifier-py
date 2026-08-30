@@ -1,0 +1,12 @@
+{
+  "@context": ["https://www.w3.org/ns/did/v1"],
+  "id": "did:web:agents.example.com:test-witness-rs",
+  "verificationMethod": [{
+    "id": "did:web:agents.example.com:test-witness-rs#key-1",
+    "type": "Ed25519VerificationKey2020",
+    "controller": "did:web:agents.example.com:test-witness-rs",
+    "publicKeyMultibase": "z6Mkfmm57fsb6VL7zVusP8zeA9SYkCKdvUhby2G7Yh8vvQ1P"
+  }],
+  "assertionMethod": ["did:web:agents.example.com:test-witness-rs#key-1"],
+  "_note": "TEST ONLY - witness identity for RFC-ACDP-0015 PY-4 cross-implementation interop (Rust -> Python direction). Private seed = 32 bytes of 0x08. Minted by acdp-rs's own WitnessSigner::mint."
+}

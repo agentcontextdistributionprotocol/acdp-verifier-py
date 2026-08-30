@@ -1,0 +1,16 @@
+{
+  "cosignature_version": "acdp-cosig/1",
+  "witness_id": "did:web:agents.example.com:test-witness",
+  "witnessed_checkpoint": {
+    "log_id": "did:web:registry.example.com/log/py-verifier-interop",
+    "tree_size": 7,
+    "root_hash": "sha256:7073a69d0ac7a3ae3d2ec5a1e1c5736c605c02565e2a0f45ce4e93c3d2fcddfa",
+    "timestamp": "2026-08-29T00:00:00.000Z"
+  },
+  "witnessed_at": "2026-08-29T00:05:00.000Z",
+  "signature": {
+    "algorithm": "ed25519",
+    "key_id": "did:web:agents.example.com:test-witness#key-1",
+    "value": "86RrpFMT2jIR/1ac9iB9fEZZq6x6GaRgQi5GkjEFKnPT61XbXtZmOKW+hhM6TlUvgtkMHzwYtuq6kCVhCiFiAQ=="
+  }
+}

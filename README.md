@@ -77,13 +77,22 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 # Interop check: fully verify a publish-request file (hash + signature)
 .venv/bin/python interop_check.py samples/sig-001-publish-request.json \
     --did-doc samples/test-producer-did.json
+
+# Interop check: fully verify a witness cosignature file (RFC-ACDP-0015 §8)
+.venv/bin/python interop_check_cosignature.py samples/witness-cosignature-py.json \
+    --did-doc samples/test-witness-did.json
+
+# Interop check: verify a cosignature minted by the OTHER implementation (acdp-rs)
+.venv/bin/python interop_check_cosignature.py samples/witness-cosignature-rs.json \
+    --did-doc samples/witness-did-rs.json
 ```
 
-Current conformance status: **85 in-scope fixtures PASS, 0 FAIL, 54 SKIP
-(explicit out-of-scope markers), 139 total** — including every golden vector
+Current conformance status: **90 in-scope fixtures PASS, 0 FAIL, 54 SKIP
+(explicit out-of-scope markers), 144 total** — including every golden vector
 (`sig-001/002/003`, `can-001..012`, `lin-001`, `fp-001`, `rcpt-001..004`,
-`rot-001`, `rev-001/002`, `lhr-001..004`, `log-001..004`, `wit-001..004`) and
-the end-to-end verification of `examples/retrieval/golden-context.json` and
+`rot-001`, `rev-001/002`, `lhr-001..004`, `log-001..004`, `wit-001..004`,
+`anc-001..005`) and the end-to-end verification of
+`examples/retrieval/golden-context.json` and
 `golden-context-with-receipt.json`.
 
 The witness-cosigning family (`wit-*`, RFC-ACDP-0015) is executed, not merely
@@ -97,6 +106,24 @@ gate is real, not a blanket reject); `wit-004` resolves witness A's
 `assertionMethod` key from a real DID document and confirms the wrong-key
 signature fails with `invalid_witness_cosignature`, while witness A's correct
 golden signature over the same body verifies.
+
+## Cross-implementation interop (RFC-ACDP-0015 witness cosigning)
+
+Every conformance PASS above is each implementation independently
+re-deriving the *same* spec golden vectors — never one implementation's
+output checked by the other. `interop_check_cosignature.py` plus the
+`samples/witness-*-rs.json` pair close that gap for witness cosigning: a real
+cosignature minted by `acdp-rs`'s own `WitnessSigner` (test seed `32×0x08`),
+independently verified here, byte-for-byte, with this repo's own §8
+implementation — not a shared fixture, an artifact that actually crossed the
+implementation boundary. The reverse direction
+(`samples/witness-cosignature-py.json` + `samples/test-witness-did.json`,
+minted by this repo's own `acdp_verifier.signing`) was independently
+confirmed by `acdp-rs`'s own consumer code
+(`acdp_client::witness::verify_witness_cosignature_value`). Both directions
+re-run on every push (see `.github/workflows/ci.yml`'s two
+`Interop *-check (witness cosignature...)` steps) — this is a standing,
+CI-checked crossing, not a one-off manual exchange.
 
 ## Dependency choices
 
