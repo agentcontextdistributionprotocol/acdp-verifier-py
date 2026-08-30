@@ -34,7 +34,8 @@ jobs:
           # without a commit here. Bump deliberately when adopting new
           # fixtures — the runner FAILS (never skips) an unregistered
           # fixture, so a new family must land with its executor.
-          # (spec main HEAD as of 2026-08-29; SPEC-9/SPEC-7 — anc-* family + rev-002 reshape)
+          # (spec main HEAD as of 2026-08-30; SPEC-8b/SPEC-7/SPEC-11 — anchor-schemes
+          # registry + the wit-002 scenario/expected -> input/scenarios[] reshape)
           ref: 891151171d138cc5da62e70eb75250b2470554db
           path: agentcontextdistributionprotocol
       - uses: actions/setup-python@v7
