@@ -55,3 +55,14 @@ jobs:
       - name: Interop self-check (offline sample)
         working-directory: acdp-verifier-py
         run: python interop_check.py samples/sig-001-publish-request.json --did-doc samples/test-producer-did.json
+      - name: Interop self-check (witness cosignature, offline sample)
+        working-directory: acdp-verifier-py
+        run: python interop_check_cosignature.py samples/witness-cosignature-py.json --did-doc samples/test-witness-did.json
+      # samples/witness-cosignature-rs.json + witness-did-rs.json were minted by
+      # acdp-rs's own WitnessSigner (test seed 32x0x08) and independently
+      # self-verified there — the first artifact to cross the implementation
+      # boundary (RFC-ACDP-0015 PY-4). Re-verifying it here on every push is
+      # the actual interop evidence, not the one-off exchange.
+      - name: Interop cross-check (witness cosignature minted by acdp-rs)
+        working-directory: acdp-verifier-py
+        run: python interop_check_cosignature.py samples/witness-cosignature-rs.json --did-doc samples/witness-did-rs.json
