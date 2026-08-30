@@ -34,10 +34,10 @@ jobs:
           # without a commit here. Bump deliberately when adopting new
           # fixtures — the runner FAILS (never skips) an unregistered
           # fixture, so a new family must land with its executor.
-          # (spec main HEAD as of 2026-08-28)
-          ref: bff3cf3afbdcea619834916e8f0bcac7e82ba658
+          # (spec main HEAD as of 2026-08-29; SPEC-9/SPEC-7 — anc-* family + rev-002 reshape)
+          ref: 417211f6a13aeceef4db00eb67f98ed0ed13761b
           path: agentcontextdistributionprotocol
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
       - name: Install
@@ -55,3 +55,14 @@ jobs:
       - name: Interop self-check (offline sample)
         working-directory: acdp-verifier-py
         run: python interop_check.py samples/sig-001-publish-request.json --did-doc samples/test-producer-did.json
+      - name: Interop self-check (witness cosignature, offline sample)
+        working-directory: acdp-verifier-py
+        run: python interop_check_cosignature.py samples/witness-cosignature-py.json --did-doc samples/test-witness-did.json
+      # samples/witness-cosignature-rs.json + witness-did-rs.json were minted by
+      # acdp-rs's own WitnessSigner (test seed 32x0x08) and independently
+      # self-verified there — the first artifact to cross the implementation
+      # boundary (RFC-ACDP-0015 PY-4). Re-verifying it here on every push is
+      # the actual interop evidence, not the one-off exchange.
+      - name: Interop cross-check (witness cosignature minted by acdp-rs)
+        working-directory: acdp-verifier-py
+        run: python interop_check_cosignature.py samples/witness-cosignature-rs.json --did-doc samples/witness-did-rs.json

@@ -675,24 +675,65 @@ def run_rev_001(fixture: JsonObj, ctx: SpecContext) -> None:
 
 
 def run_rev_002(fixture: JsonObj, ctx: SpecContext) -> None:
-    rev001 = ctx.fixture("rev-001")
+    matrix = fixture["input"]
+    rev_input = matrix["revocation"]
+    body_input = matrix["body_under_test"]
+    did_input = matrix["producer_did_document"]
+    receipt_input = matrix["registry_receipt"]
+
+    rev001 = ctx.fixture(rev_input["fixture_ref"])
     rev_body = rev001["vectors"][0]["expected"]["publish_request_body"]
     statement = revocation.validate_revocation_shape(rev_body)
     check(
-        statement.compromised_since == "2026-05-01T00:00:00.000Z",
-        "boundary T diverged from rev-001",
+        statement.compromised_since == rev_input["compromised_since"],
+        "boundary T diverged from the input matrix",
     )
+    check(
+        statement.revoked_key_fingerprint == rev_input["revoked_key_fingerprint"],
+        "revoked fingerprint diverged from the input matrix",
+    )
+    signer_public = bytes.fromhex(rev001["test_keypair"]["public_key_hex"])
+    check(
+        fingerprint_ed25519(signer_public) == rev_input["signer_key_fingerprint"],
+        "revocation signer fingerprint diverged from the input matrix",
+    )
+
+    body_fixture = ctx.fixture(body_input["fixture_ref"])
+    body_signer_public = bytes.fromhex(body_fixture["test_keypair"]["public_key_hex"])
+    check(
+        fingerprint_ed25519(body_signer_public) == body_input["signer_key_fingerprint"],
+        "body-under-test signer fingerprint diverged from the input matrix",
+    )
+    check(
+        rev_input["revoked_key_fingerprint"] == body_input["signer_key_fingerprint"],
+        "revocation must target the body-under-test's own signer",
+    )
+
+    did_doc = ctx.producer_did_document()
+    vm_ids = {str(vm["id"]).rsplit("#", 1)[-1] for vm in did_doc["verificationMethod"]}
+    am_ids = {str(ref).rsplit("#", 1)[-1] for ref in did_doc.get("assertionMethod", [])}
+    for key_name, spec in did_input["keys"].items():
+        check(
+            (key_name in vm_ids) == spec["in_verificationMethod"],
+            f"{key_name} verificationMethod presence diverged from the input matrix",
+        )
+        check(
+            (key_name in am_ids) == spec["in_assertionMethod"],
+            f"{key_name} assertionMethod presence diverged from the input matrix",
+        )
+
     verdicts = revocation.BoundaryVerdict
+    schedule = receipt_input["created_at_by_scenario"]
 
     # A — receipt-attested publish time before T.
     a = revocation.classify_against_boundary(
-        statement, receipt_attested_created_at="2026-04-16T10:30:15.123Z"
+        statement, receipt_attested_created_at=schedule["A"]
     )
     check(a is verdicts.HISTORICALLY_AUTHORIZED_PRE_COMPROMISE, f"scenario A verdict: {a}")
 
-    # B — at or after T (fixture pins 2026-05-03T09:00:00.000Z), plus the exact-T edge.
+    # B — at or after T, plus the exact-T edge.
     b = revocation.classify_against_boundary(
-        statement, receipt_attested_created_at="2026-05-03T09:00:00.000Z"
+        statement, receipt_attested_created_at=schedule["B"]
     )
     check(b is verdicts.FAIL_CLOSED_IN_WINDOW, f"scenario B verdict: {b}")
     at_t = revocation.classify_against_boundary(
@@ -701,7 +742,9 @@ def run_rev_002(fixture: JsonObj, ctx: SpecContext) -> None:
     check(at_t is verdicts.FAIL_CLOSED_IN_WINDOW, "created_at == T must fail closed")
 
     # C — no verifiable publish time.
-    c = revocation.classify_against_boundary(statement, receipt_attested_created_at=None)
+    c = revocation.classify_against_boundary(
+        statement, receipt_attested_created_at=schedule["C"]
+    )
     check(c is verdicts.FAIL_CLOSED_TIME_UNVERIFIABLE, f"scenario C verdict: {c}")
 
     # D — trust classes distinguishable: registry-attested carries an explicit
@@ -1643,6 +1686,75 @@ def run_schema_generic(fixture: JsonObj, ctx: SpecContext) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Anchors (anc-*, RFC-ACDP-0016)
+# ---------------------------------------------------------------------------
+
+
+def run_anc_001(fixture: JsonObj, ctx: SpecContext) -> None:
+    body = fixture["input"]["body"]
+    expect_accept(
+        lambda: validation.validate_publish_request(body), "anc-001 well-formed anchor"
+    )
+
+
+def run_anc_002(fixture: JsonObj, ctx: SpecContext) -> None:
+    anchor = fixture["input"]["anchor_under_test"]
+    expect_code(
+        lambda: validation.validate_anchor(anchor),
+        fixture["expected"]["error_code"],
+        "anc-002 malformed anchor content_hash",
+    )
+
+
+def run_anc_003(fixture: JsonObj, ctx: SpecContext) -> None:
+    anchors = fixture["input"]["anchor_under_test"]
+    expect_code(
+        lambda: validation.validate_anchors(anchors),
+        fixture["expected"]["error_code"],
+        "anc-003 empty anchors array",
+    )
+
+
+def run_anc_005(fixture: JsonObj, ctx: SpecContext) -> None:
+    """A verifier ignorant of an anchor's scheme still fully verifies the body.
+
+    No resolution logic for any anchor scheme exists anywhere in this
+    implementation — ``validate_anchor`` accepts any non-empty ``scheme``
+    string, and ``verify_context_body`` never inspects it. Building a
+    self-signed body carrying an unrecognized-scheme anchor and confirming
+    it verifies end-to-end is therefore a direct, non-vacuous check of
+    RFC-ACDP-0016 §6's "MUST ignore for resolution, MUST still verify".
+    """
+    path = ctx.spec_dir / "examples" / "retrieval" / "golden-context.json"
+    envelope = json.loads(path.read_text(encoding="utf-8"))
+    body = dict(envelope["body"])
+    body["anchors"] = [
+        {
+            "scheme": "a-scheme.this-verifier.does-not-recognize",
+            "content_hash": "sha256:" + "11" * 32,
+        }
+    ]
+    expect_accept(lambda: validation.validate_anchor(body["anchors"][0]), "anc-005 anchor shape")
+
+    sig001 = ctx.fixture("sig-001")
+    seed = bytes.fromhex(sig001["test_keypair"]["private_seed_hex"])
+    producer_public = bytes.fromhex(sig001["test_keypair"]["public_key_hex"])
+    recomputed_hash = hashing.content_hash(hashing.producer_content(body))
+    body["content_hash"] = recomputed_hash
+    body["signature"] = {
+        "algorithm": "ed25519",
+        "key_id": body["signature"]["key_id"],
+        "value": base64.b64encode(signing.sign_ed25519(seed, recomputed_hash)).decode("ascii"),
+    }
+
+    agent_id = str(body["agent_id"])
+    documents = {agent_id: make_did_document(agent_id, "key-1", producer_public)}
+    result = verify.verify_context_body(body, did_documents=documents)
+    check(result.content_hash == body["content_hash"], "anc-005 recomputed hash mismatch")
+    check(not result.historically_authorized, "anc-005 key must be current, not historical")
+
+
+# ---------------------------------------------------------------------------
 # Examples (spec repo examples/)
 # ---------------------------------------------------------------------------
 
@@ -1733,6 +1845,11 @@ _EXECUTORS: dict[str, Executor] = {
     "wit-002": run_wit_002,
     "wit-003": run_wit_003,
     "wit-004": run_wit_004,
+    "anc-001": run_anc_001,
+    "anc-002": run_anc_002,
+    "anc-003": run_anc_003,
+    "anc-004": run_can_generic,
+    "anc-005": run_anc_005,
     "caps-001": run_caps_simple,
     "caps-002": run_caps_simple,
     "caps-003": run_caps_simple,
