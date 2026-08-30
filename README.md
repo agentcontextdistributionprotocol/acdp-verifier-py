@@ -79,11 +79,12 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
     --did-doc samples/test-producer-did.json
 ```
 
-Current conformance status: **85 in-scope fixtures PASS, 0 FAIL, 54 SKIP
-(explicit out-of-scope markers), 139 total** — including every golden vector
+Current conformance status: **90 in-scope fixtures PASS, 0 FAIL, 54 SKIP
+(explicit out-of-scope markers), 144 total** — including every golden vector
 (`sig-001/002/003`, `can-001..012`, `lin-001`, `fp-001`, `rcpt-001..004`,
-`rot-001`, `rev-001/002`, `lhr-001..004`, `log-001..004`, `wit-001..004`) and
-the end-to-end verification of `examples/retrieval/golden-context.json` and
+`rot-001`, `rev-001/002`, `lhr-001..004`, `log-001..004`, `wit-001..004`,
+`anc-001..005`) and the end-to-end verification of
+`examples/retrieval/golden-context.json` and
 `golden-context-with-receipt.json`.
 
 The witness-cosigning family (`wit-*`, RFC-ACDP-0015) is executed, not merely
