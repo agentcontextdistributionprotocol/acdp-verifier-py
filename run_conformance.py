@@ -1243,10 +1243,17 @@ def run_wit_002(fixture: JsonObj, ctx: SpecContext) -> None:
     against the rewritten root (so the witness MUST refuse), yet succeeds
     against the genuine root (so the gate is real, not a blanket reject).
     """
-    scenario = fixture["scenario"]
-    expected = fixture["expected"]
-    retained = scenario["retained_head"]
-    presented = scenario["presented_checkpoint"]
+    # Spec 8911511 reshaped this fixture's singular scenario/expected wrapper
+    # into rev-002's input/scenarios[] shape (editorial, no normative change).
+    matrix = fixture["input"]
+    scenarios = fixture["scenarios"]
+    check(
+        len(scenarios) == 1,
+        f"wit-002 declares {len(scenarios)} scenarios; this executor covers exactly 1",
+    )
+    expected = scenarios[0]["expected"]
+    retained = matrix["retained_head"]
+    presented = matrix["presented_checkpoint"]
 
     # The genuine consistency proof and roots come from the chained log-003.
     log003 = ctx.fixture("log-003")["vectors"][0]["expected"]
@@ -1292,6 +1299,7 @@ def run_wit_002(fixture: JsonObj, ctx: SpecContext) -> None:
     )
 
     # Scenario assertions (§7): refuse, no cosignature, evidence persisted.
+    check(expected["outcome"] == "failure", "scenario: consistency check must fail")
     check(expected["witness_action"] == "refuse", "scenario: witness must refuse")
     check(expected["cosignature_emitted"] is False, "scenario: no cosignature emitted")
     check(expected["evidence_persisted"] is True, "scenario: evidence must be persisted")
