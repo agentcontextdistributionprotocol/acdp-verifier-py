@@ -25,20 +25,16 @@ jobs:
       # The conformance runner reads golden fixtures from the canonical spec
       # checkout via --spec-dir. Pull it as a sibling so this repo genuinely
       # re-verifies against the spec's pinned vectors on every push — the whole
-      # point of an independent second implementation.
-      - name: Check out the ACDP spec
-        uses: actions/checkout@v7
+      # point of an independent second implementation. Pinned deliberately so
+      # a spec-repo push cannot change this repo's CI result without a commit
+      # here: the runner FAILS (never skips) an unregistered fixture, so a new
+      # fixture family must land together with its executor. The pin below is
+      # bumped by the monthly bump-spec-ref automation.
+      - name: Check out the ACDP spec (pinned)
+        id: spec
+        uses: agentcontextdistributionprotocol/acdp-ci/actions/checkout-spec@015910153b61c32abbe018afe85d44868897bf3b # v1
         with:
-          repository: agentcontextdistributionprotocol/agentcontextdistributionprotocol
-          # Pinned so a spec-repo push cannot change this repo's CI result
-          # without a commit here. Bump deliberately when adopting new
-          # fixtures — the runner FAILS (never skips) an unregistered
-          # fixture, so a new family must land with its executor.
-          # (spec main HEAD as of 2026-08-30; SPEC-8b follow-up — RFC-ACDP-0016 §7
-          # stops reproducing MACP's hash formula. Editorial prose only: no
-          # fixture, schema, or wire change since 8911511.)
           ref: 21759799a44c81f55884913d306827b7cc7a01bb
-          path: agentcontextdistributionprotocol
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
@@ -47,7 +43,7 @@ jobs:
         run: python -m pip install --upgrade pip && pip install -e ".[dev]"
       - name: Conformance (independent re-derivation of every golden vector)
         working-directory: acdp-verifier-py
-        run: python run_conformance.py --spec-dir ../agentcontextdistributionprotocol
+        run: python run_conformance.py --spec-dir ${{ steps.spec.outputs.path }}
       - name: Unit tests
         working-directory: acdp-verifier-py
         run: pytest -q
