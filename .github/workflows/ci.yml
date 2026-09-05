@@ -37,7 +37,7 @@ jobs:
           # (spec main HEAD as of 2026-08-30; SPEC-8b follow-up — RFC-ACDP-0016 §7
           # stops reproducing MACP's hash formula. Editorial prose only: no
           # fixture, schema, or wire change since 8911511.)
-          ref: 21759799a44c81f55884913d306827b7cc7a01bb
+          ref: d3a34134ea6471aac2622ccaf8c7c7063d8888c5
           path: agentcontextdistributionprotocol
       - uses: actions/setup-python@v7
         with:
