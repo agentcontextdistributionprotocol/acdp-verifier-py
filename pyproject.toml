@@ -93,9 +93,15 @@ parallel = true
 branch = false
 
 [tool.coverage.report]
-# Measured combined coverage (unit tests + conformance) is 83.97%
-# (1372/1634 statements), identical on py3.11 and py3.14. 83 with
-# precision 2 avoids a rounding trap at the default precision 0.
+# Measured combined coverage (unit tests + conformance) is 84.00%
+# (1376/1638 statements), identical on py3.11 and py3.14. Net +4
+# statements from this phase's lint fixes: didweb, hashing, receipts,
+# revocation, validation, and verify each gained one where UP035 split
+# a combined typing import in two; jcs.py lost two where SIM108
+# collapsed an if/else into a ternary; cosignature, headreceipt, and
+# translog each netted zero (an import-split gain offset by an F401
+# removal, an import merge, and a SIM102 collapse respectively). 83
+# with precision 2 avoids a rounding trap at the default precision 0.
 # This is a RATCHET: raise it when coverage genuinely improves, never
 # lower it to make a red build green.
 fail_under = 83

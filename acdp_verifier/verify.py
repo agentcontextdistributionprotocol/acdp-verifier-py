@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import base64
 import binascii
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
 from .didkey import ResolvedKey, resolve_did_key
 from .didweb import Authorization, resolve_verification_method

@@ -50,14 +50,14 @@ def body_for_receipt() -> dict[str, Any]:
 
 
 def _verify(receipt: dict[str, Any], **overrides: Any) -> None:
-    kwargs: dict[str, Any] = dict(
-        registry_public_key=REGISTRY_PUBLIC,
-        serving_authority="registry.example.com",
-        expected_ctx_id=str(RECEIPT_UNSIGNED["ctx_id"]),
-        body=body_for_receipt(),
-        recomputed_content_hash=str(RECEIPT_UNSIGNED["content_hash"]),
-        resolved_producer_fingerprint=PRODUCER_FP,
-    )
+    kwargs: dict[str, Any] = {
+        "registry_public_key": REGISTRY_PUBLIC,
+        "serving_authority": "registry.example.com",
+        "expected_ctx_id": str(RECEIPT_UNSIGNED["ctx_id"]),
+        "body": body_for_receipt(),
+        "recomputed_content_hash": str(RECEIPT_UNSIGNED["content_hash"]),
+        "resolved_producer_fingerprint": PRODUCER_FP,
+    }
     kwargs.update(overrides)
     receipts.verify_receipt(receipt, **kwargs)
 
@@ -143,12 +143,12 @@ def signed_head_receipt(**overrides: Any) -> dict[str, Any]:
 
 class TestHeadReceipt:
     def _verify(self, receipt: dict[str, Any], **overrides: Any) -> None:
-        kwargs: dict[str, Any] = dict(
-            registry_public_key=REGISTRY_PUBLIC,
-            serving_authority="registry.example.com",
-            expected_lineage_id=str(HEAD_UNSIGNED["lineage_id"]),
-            consumer_clock=parse_rfc3339(str(receipt.get("as_of", HEAD_UNSIGNED["as_of"]))),
-        )
+        kwargs: dict[str, Any] = {
+            "registry_public_key": REGISTRY_PUBLIC,
+            "serving_authority": "registry.example.com",
+            "expected_lineage_id": str(HEAD_UNSIGNED["lineage_id"]),
+            "consumer_clock": parse_rfc3339(str(receipt.get("as_of", HEAD_UNSIGNED["as_of"]))),
+        }
         kwargs.update(overrides)
         headreceipt.verify_head_receipt(receipt, **kwargs)
 

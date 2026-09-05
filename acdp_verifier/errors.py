@@ -10,17 +10,17 @@ from __future__ import annotations
 
 __all__ = [
     "AcdpError",
-    "ValidationError",
-    "HashMismatch",
     "DataRefHashMismatch",
     "EmbeddedTooLarge",
-    "SchemaViolation",
-    "InvalidSignature",
-    "KeyResolutionFailed",
-    "KeyNotAuthorized",
-    "InvalidReceipt",
+    "HashMismatch",
     "InvalidLogProof",
+    "InvalidReceipt",
+    "InvalidSignature",
     "InvalidWitnessCosignature",
+    "KeyNotAuthorized",
+    "KeyResolutionFailed",
+    "SchemaViolation",
+    "ValidationError",
 ]
 
 

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
-
 from typing import Any
+
+import pytest
 
 from acdp_verifier import hashing
 from acdp_verifier.errors import HashMismatch, SchemaViolation
@@ -29,14 +29,14 @@ def test_sig001_content_hash() -> None:
 
 
 def test_exclusion_set_is_the_six_names() -> None:
-    assert hashing.EXCLUSION_SET == {
+    assert {
         "content_hash",
         "signature",
         "ctx_id",
         "lineage_id",
         "origin_registry",
         "created_at",
-    }
+    } == hashing.EXCLUSION_SET
 
 
 def test_exclusion_by_name_keeps_unknown_fields() -> None:

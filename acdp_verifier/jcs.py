@@ -24,9 +24,9 @@ from __future__ import annotations
 
 import json
 import math
-from typing import Any, Union
+from typing import Any
 
-JsonValue = Union[None, bool, int, float, str, list["JsonValue"], dict[str, "JsonValue"]]
+JsonValue = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 
 __all__ = ["JcsError", "canonicalize", "dumps", "format_number", "loads"]
 
@@ -47,7 +47,7 @@ def _reject_duplicate_keys(pairs: list[tuple[str, JsonValue]]) -> dict[str, Json
     return obj
 
 
-def loads(data: Union[str, bytes]) -> JsonValue:
+def loads(data: str | bytes) -> JsonValue:
     """Parse JSON text strictly: valid UTF-8, no duplicate member names, no NaN/Infinity."""
     if isinstance(data, bytes):
         try:
@@ -74,7 +74,7 @@ def _reject_constant(name: str) -> JsonValue:
 _MAX_SAFE_INTEGER = 2**53
 
 
-def format_number(value: Union[int, float]) -> str:
+def format_number(value: int | float) -> str:
     """Serialize a JSON number per RFC 8785 §3.2.2.3 / ECMA-262 7.1.12.1."""
     if isinstance(value, bool):  # bool is an int subclass; guard explicitly
         raise JcsError("bool is not a number")
@@ -108,10 +108,7 @@ def format_number(value: Union[int, float]) -> str:
     else:
         exponent = n - 1
         exp_str = f"e+{exponent}" if exponent >= 0 else f"e-{-exponent}"
-        if k == 1:
-            body = digits + exp_str
-        else:
-            body = digits[0] + "." + digits[1:] + exp_str
+        body = digits + exp_str if k == 1 else digits[0] + "." + digits[1:] + exp_str
     return "-" + body if negative else body
 
 

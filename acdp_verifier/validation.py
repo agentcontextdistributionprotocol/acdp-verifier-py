@@ -13,7 +13,8 @@ from __future__ import annotations
 import base64
 import binascii
 import re
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from . import jcs
 from .errors import (
@@ -25,12 +26,12 @@ from .hashing import sha256_prefixed
 from .timeutil import is_canonical_ms, is_rfc3339_utc
 
 __all__ = [
+    "CONTENT_HASH_RE",
     "CTX_ID_RE",
     "DID_RE",
     "DID_URL_RE",
     "HOSTNAME_RE",
     "LINEAGE_ID_RE",
-    "CONTENT_HASH_RE",
     "STATUS_RE",
     "compare_semver",
     "ctx_id_authority",
@@ -364,8 +365,8 @@ _PUBLISH_REQUIRED = (
     "visibility",
 )
 _PUBLISH_ALLOWED = frozenset(
-    _PUBLISH_REQUIRED
-    + (
+    (
+        *_PUBLISH_REQUIRED,
         "description",
         "domain",
         "schema_uri",
@@ -536,7 +537,7 @@ def validate_publish_request(request: Any) -> None:
 
 # --- retrieved body (acdp-context-body.schema.json, OPEN) ----------------------
 
-_BODY_REQUIRED = _PUBLISH_REQUIRED + ("ctx_id", "lineage_id", "origin_registry", "created_at")
+_BODY_REQUIRED = (*_PUBLISH_REQUIRED, "ctx_id", "lineage_id", "origin_registry", "created_at")
 
 
 def validate_body(body: Any) -> None:
@@ -677,7 +678,7 @@ def validate_capabilities(caps: Any, *, fetched_authority: str | None = None) ->
 # --- responses ------------------------------------------------------------------
 
 _PUBLISH_RESPONSE_REQUIRED = ("ctx_id", "lineage_id", "version", "created_at", "status")
-_PUBLISH_RESPONSE_ALLOWED = frozenset(_PUBLISH_RESPONSE_REQUIRED + ("registry_receipt",))
+_PUBLISH_RESPONSE_ALLOWED = frozenset((*_PUBLISH_RESPONSE_REQUIRED, "registry_receipt"))
 
 
 def validate_publish_response(response: Any, *, allow_receipt: bool = True) -> None:
@@ -713,7 +714,7 @@ _MATCH_SUMMARY_REQUIRED = (
     "created_at",
     "status",
 )
-_MATCH_SUMMARY_ALLOWED = frozenset(_MATCH_SUMMARY_REQUIRED + ("summary", "domain", "visibility"))
+_MATCH_SUMMARY_ALLOWED = frozenset((*_MATCH_SUMMARY_REQUIRED, "summary", "domain", "visibility"))
 
 
 def _validate_match_summary(match: Any) -> None:

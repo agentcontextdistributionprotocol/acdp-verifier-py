@@ -8,7 +8,8 @@ typed-model knowledge (fixtures can-008/can-009).
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from . import jcs
 from .errors import HashMismatch, SchemaViolation

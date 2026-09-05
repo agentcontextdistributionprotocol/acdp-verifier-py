@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Mapping
+from typing import Any
 
 from .errors import KeyNotAuthorized, SchemaViolation
 from .timeutil import is_canonical_ms, parse_rfc3339
@@ -13,9 +14,9 @@ from .validation import CONTENT_HASH_RE
 __all__ = [
     "BoundaryVerdict",
     "RevocationStatement",
+    "check_not_self_signed",
     "classify_against_boundary",
     "validate_revocation_shape",
-    "check_not_self_signed",
 ]
 
 
