@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 __all__ = [
     "CANONICAL_MS_RE",
@@ -56,5 +56,8 @@ def parse_rfc3339(value: str) -> datetime:
     if frac:
         digits = frac[1:]  # strip leading '.'
         micro = int(digits[:6].ljust(6, "0"))
-    parsed = datetime.strptime(base, "%Y-%m-%dT%H:%M:%S")
-    return parsed.replace(microsecond=micro, tzinfo=timezone.utc)
+    # base is sliced from a value that RFC3339_RE already required to end in a
+    # literal "Z" (the RFC 3339 UTC-only profile), so it never carries an offset;
+    # the naive result is immediately given tzinfo=UTC below and can't escape.
+    parsed = datetime.strptime(base, "%Y-%m-%dT%H:%M:%S")  # noqa: DTZ007
+    return parsed.replace(microsecond=micro, tzinfo=UTC)

@@ -18,9 +18,10 @@ the witness's own DID and key (§5, §12) — the construction itself is identic
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .didkey import ResolvedKey, resolve_did_key
 from .didweb import Authorization, resolve_verification_method
@@ -32,7 +33,6 @@ from .errors import (
     KeyResolutionFailed,
 )
 from .receipts import receipt_hash, verify_signature_envelope
-from .signing import p256_public_key_from_sec1, verify_ed25519, verify_p256
 from .timeutil import is_canonical_ms, parse_rfc3339
 
 __all__ = [

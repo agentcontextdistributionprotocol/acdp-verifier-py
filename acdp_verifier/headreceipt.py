@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timedelta
-from typing import Any, Mapping
+from typing import Any
 
-from .errors import InvalidReceipt
+from .errors import InvalidReceipt, SchemaViolation
 from .receipts import verify_signature_envelope
 from .timeutil import is_canonical_ms, parse_rfc3339
 from .validation import LINEAGE_ID_RE, STATUS_RE, ctx_id_authority, validate_signature_object
-from .errors import SchemaViolation
 
 __all__ = ["HEAD_RECEIPT_FIELDS", "RECEIPT_VERSION", "verify_head_receipt"]
 

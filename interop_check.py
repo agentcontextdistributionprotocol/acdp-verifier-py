@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Interop check: fully verify an ACDP publish-request JSON file, offline.
 
 Runs the strict pipeline order of RFC-ACDP-0001 §5.11: structural schema
@@ -39,7 +38,7 @@ def main() -> int:
     raw = args.request.read_bytes()
     try:
         request = jcs.loads(raw)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 -- CLI entry point: report the failure, don't crash with a traceback
         print(f"FAIL parse: {exc}")
         return 1
     if not isinstance(request, dict):

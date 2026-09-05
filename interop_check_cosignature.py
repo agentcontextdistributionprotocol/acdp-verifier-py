@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Interop check: fully verify an RFC-ACDP-0015 witness cosignature, offline.
 
 Runs the §8 consumer verification procedure over an externally produced
@@ -55,7 +54,7 @@ def main() -> int:
     raw = args.cosignature.read_bytes()
     try:
         cosig = jcs.loads(raw)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 -- CLI entry point: report the failure, don't crash with a traceback
         print(f"FAIL parse: {exc}")
         return 1
     if not isinstance(cosig, dict):

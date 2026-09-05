@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from . import jcs
 from .errors import InvalidLogProof, SchemaViolation
@@ -115,8 +116,8 @@ def compute_inclusion_path(index: int, leaf_hashes: Sequence[bytes]) -> list[byt
         return []
     k = _largest_power_of_two_less_than(n)
     if index < k:
-        return compute_inclusion_path(index, leaf_hashes[:k]) + [merkle_tree_hash(leaf_hashes[k:])]
-    return compute_inclusion_path(index - k, leaf_hashes[k:]) + [merkle_tree_hash(leaf_hashes[:k])]
+        return [*compute_inclusion_path(index, leaf_hashes[:k]), merkle_tree_hash(leaf_hashes[k:])]
+    return [*compute_inclusion_path(index - k, leaf_hashes[k:]), merkle_tree_hash(leaf_hashes[:k])]
 
 
 def compute_consistency_path(first: int, leaf_hashes: Sequence[bytes]) -> list[bytes]:
@@ -137,8 +138,8 @@ def _subproof(m: int, hashes: Sequence[bytes], complete: bool) -> list[bytes]:
         return [merkle_tree_hash(hashes)]
     k = _largest_power_of_two_less_than(n)
     if m <= k:
-        return _subproof(m, hashes[:k], complete) + [merkle_tree_hash(hashes[k:])]
-    return _subproof(m - k, hashes[k:], False) + [merkle_tree_hash(hashes[:k])]
+        return [*_subproof(m, hashes[:k], complete), merkle_tree_hash(hashes[k:])]
+    return [*_subproof(m - k, hashes[k:], False), merkle_tree_hash(hashes[:k])]
 
 
 def verify_inclusion(
@@ -196,7 +197,7 @@ def verify_consistency(
 
     path = list(consistency_path)
     if first == 1 << (first.bit_length() - 1):  # exact power of two
-        path = [first_root] + path
+        path = [first_root, *path]
 
     fn = first - 1
     sn = second - 1
@@ -270,12 +271,11 @@ def verify_checkpoint(
     key_did = str(checkpoint["signature"]["key_id"]).partition("#")[0]
     if key_did != registry_did:
         raise InvalidLogProof("signature.key_id DID != log_id registry DID")
-    if serving_authority is not None:
-        if registry_did != f"did:web:{serving_authority}":
-            raise InvalidLogProof(
-                f"log_id registry DID {registry_did!r} does not bind to serving "
-                f"authority {serving_authority!r}"
-            )
+    if serving_authority is not None and registry_did != f"did:web:{serving_authority}":
+        raise InvalidLogProof(
+            f"log_id registry DID {registry_did!r} does not bind to serving "
+            f"authority {serving_authority!r}"
+        )
 
     # Step 4 — form.
     tree_size = checkpoint["tree_size"]

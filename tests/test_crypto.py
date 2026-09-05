@@ -104,9 +104,11 @@ class TestFingerprints:
         assert fingerprint("ecdsa-p256", b"\x03" + P256_X) == want
 
     def test_fp_input_is_raw_bytes_only(self) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Ed25519 raw public key must be exactly 32 bytes"):
             fingerprint_ed25519(b"\x00" * 33)  # SPKI-ish length: wrong
-        with pytest.raises(ValueError):
+        with pytest.raises(
+            ValueError, match="P-256 compressed point must be 33 bytes with 0x02/0x03 prefix"
+        ):
             fingerprint_p256_compressed(b"\x04" + P256_X)  # uncompressed prefix
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="unknown fingerprint algorithm: rsa"):
             fingerprint("rsa", b"\x00" * 32)

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """ACDP conformance-pack runner for the acdp-verifier-py implementation.
 
 Walks ``<spec-dir>/schemas/conformance/``, executes every in-scope fixture
@@ -18,10 +17,11 @@ import base64
 import json
 import sys
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any
 from urllib.parse import unquote
 
 from acdp_verifier import (
@@ -40,19 +40,11 @@ from acdp_verifier import (
 from acdp_verifier.base58 import b58decode, b58encode
 from acdp_verifier.errors import (
     AcdpError,
-    HashMismatch,
     SchemaViolation,
-    InvalidLogProof,
-    InvalidReceipt,
-    InvalidSignature,
-    InvalidWitnessCosignature,
-    KeyNotAuthorized,
-    KeyResolutionFailed,
 )
 from acdp_verifier.fingerprint import (
     fingerprint,
     fingerprint_ed25519,
-    fingerprint_p256_compressed,
     fingerprint_p256_xy,
 )
 from acdp_verifier.timeutil import parse_rfc3339
@@ -435,7 +427,7 @@ def run_dk_002(fixture: JsonObj, ctx: SpecContext) -> None:
         msid = agent_id[len("did:key:") :]
         key_id = f"{agent_id}#{msid}"
         expect_code(
-            lambda: didkey.resolve_did_key(agent_id, key_id, "ed25519"),
+            lambda: didkey.resolve_did_key(agent_id, key_id, "ed25519"),  # noqa: B023 -- expect_code() calls fn() synchronously before the next iteration rebinds agent_id/key_id
             fixture["expected"]["error_code"],
             f"malformed multibase ({case['case']})",
         )
@@ -1051,7 +1043,7 @@ def run_log_003(fixture: JsonObj, ctx: SpecContext) -> None:
         first_root=first_root,
         second_root=second_root,
     )
-    tampered_path = [pinned_path[0][::-1]] + pinned_path[1:]
+    tampered_path = [pinned_path[0][::-1], *pinned_path[1:]]
     expect_code(
         lambda: translog.verify_consistency(
             first=3,
@@ -1351,7 +1343,7 @@ def run_wit_003(fixture: JsonObj, ctx: SpecContext) -> None:
 
     # A duplicate cosignature from an already-counted witness does NOT raise N.
     dup = cosignature.evaluate_quorum(
-        signed_cosigs + [signed_cosigs[0]],
+        [*signed_cosigs, signed_cosigs[0]],
         checkpoint=checkpoint,
         witness_public_keys=witness_keys,
         trusted_witnesses=trusted,
@@ -1435,7 +1427,10 @@ def run_wit_004(fixture: JsonObj, ctx: SpecContext) -> None:
 def run_caps_simple(fixture: JsonObj, ctx: SpecContext) -> None:
     doc = fixture["input"]["response_body"]
     outcome = fixture["expected"]["outcome"]
-    call = lambda: validation.validate_capabilities(doc, fetched_authority=REGISTRY_AUTHORITY)
+
+    def call() -> None:
+        validation.validate_capabilities(doc, fetched_authority=REGISTRY_AUTHORITY)
+
     if outcome == "accept":
         expect_accept(call, fixture["id"])
     else:
@@ -1453,7 +1448,10 @@ def run_caps_007(fixture: JsonObj, ctx: SpecContext) -> None:
         mutated = json.loads(json.dumps(doc))
         mutated["limits"]["max_publish_per_minute"] = override
         expect_code(
-            lambda: validation.validate_capabilities(mutated, fetched_authority=REGISTRY_AUTHORITY),
+            lambda: validation.validate_capabilities(
+                mutated,  # noqa: B023 -- expect_code() calls fn() synchronously before the next iteration rebinds mutated
+                fetched_authority=REGISTRY_AUTHORITY,
+            ),
             variant["expected"]["error_code"],
             f"caps-007 reject variant {variant['name']}",
         )
@@ -1463,7 +1461,8 @@ def run_idem_007(fixture: JsonObj, ctx: SpecContext) -> None:
     for case in fixture["input"]:
         expect_code(
             lambda: validation.validate_capabilities(
-                case["response_body"], fetched_authority=REGISTRY_AUTHORITY
+                case["response_body"],  # noqa: B023 -- expect_code() calls fn() synchronously before the next iteration rebinds case
+                fetched_authority=REGISTRY_AUTHORITY,
             ),
             fixture["expected"]["error_code"],
             f"idem-007 case {case['name']}",
@@ -1475,7 +1474,10 @@ def run_status(fixture: JsonObj, ctx: SpecContext) -> None:
     excerpt = inp.get("response_body") or inp.get("response_body_excerpt")
     state = excerpt["registry_state"]
     expected = fixture["expected"]
-    call = lambda: validation.validate_registry_state(state)
+
+    def call() -> None:
+        validation.validate_registry_state(state)
+
     if expected["consumer_outcome"] == "accept":
         # Note: only registry_state.status is under test; the surrounding body
         # in status-001 is illustrative (dummy hash/signature, no contributors).
@@ -1493,7 +1495,10 @@ def run_meta(fixture: JsonObj, ctx: SpecContext) -> None:
         canonical_len = len(jcs.canonicalize_any(metadata))
         check(canonical_len > 65536, "constructed meta-002 payload too small")
     expected = fixture["expected"]
-    call = lambda: validation.validate_metadata(metadata)
+
+    def call() -> None:
+        validation.validate_metadata(metadata)
+
     if expected["outcome"] == "success":
         expect_accept(call, fixture["id"])
     else:
@@ -1916,7 +1921,7 @@ def run(spec_dir: Path) -> int:
             results.append(Result(name, "PASS"))
         except CheckFailure as exc:
             results.append(Result(name, "FAIL", str(exc)))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 - report, don't crash the run
             results.append(Result(name, "FAIL", f"{type(exc).__name__}: {exc}"))
 
     width = max(len(r.fixture_id) for r in results)

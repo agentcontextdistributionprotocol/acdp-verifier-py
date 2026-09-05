@@ -49,7 +49,7 @@ class TestInclusion:
         d = leaves(5)
         root = translog.merkle_tree_hash(d)
         path = translog.compute_inclusion_path(0, d)
-        bad = [path[0][::-1]] + path[1:]
+        bad = [path[0][::-1], *path[1:]]
         with pytest.raises(InvalidLogProof):
             translog.verify_inclusion(
                 leaf_hash_value=d[0],
@@ -68,7 +68,7 @@ class TestInclusion:
                 leaf_hash_value=d[0],
                 leaf_index=0,
                 tree_size=5,
-                inclusion_path=path + [d[1]],
+                inclusion_path=[*path, d[1]],
                 root_hash=root,
             )
         with pytest.raises(InvalidLogProof):

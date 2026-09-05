@@ -22,7 +22,7 @@ class TestBase58:
             assert b58decode(b58encode(data)) == data
 
     def test_rejects_non_alphabet(self) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="is not in the base58-btc alphabet"):
             b58decode("0OIl")
 
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import base64
 import copy
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -48,7 +48,7 @@ GOLDEN_SIG_B64 = (
     "omUcflbxeirUvPyIbuiGW0t7fch/xO2lSzTQwAvOAqsawocn4Y5J69Nwracq1I2Zercj5Qdnlc18NZQyoPcEBA=="
 )
 
-CLOCK = datetime(2026, 7, 4, 12, 0, 6, tzinfo=timezone.utc)
+CLOCK = datetime(2026, 7, 4, 12, 0, 6, tzinfo=UTC)
 
 
 def _unsigned(
@@ -243,7 +243,7 @@ def test_untrusted_witness_rejected() -> None:
 def test_future_witnessed_at_beyond_skew_rejected() -> None:
     # witnessed_at far in the future relative to the consumer clock.
     signed = _signed(WITNESS_A_SEED, witnessed_at="2026-07-04T12:00:05.000Z")
-    early_clock = datetime(2026, 7, 4, 11, 0, 0, tzinfo=timezone.utc)
+    early_clock = datetime(2026, 7, 4, 11, 0, 0, tzinfo=UTC)
     with pytest.raises(InvalidWitnessCosignature) as exc:
         cosignature.verify_cosignature(
             signed,
@@ -257,7 +257,7 @@ def test_future_witnessed_at_beyond_skew_rejected() -> None:
 def test_future_within_skew_allowance_accepted() -> None:
     signed = _signed(WITNESS_A_SEED)
     # Clock 60s before witnessed_at: inside the default 120s allowance.
-    clock = datetime(2026, 7, 4, 12, 0, 4, tzinfo=timezone.utc)
+    clock = datetime(2026, 7, 4, 12, 0, 4, tzinfo=UTC)
     result = cosignature.verify_cosignature(
         signed, checkpoint=CHECKPOINT, witness_public_key=WITNESS_A_PUB, consumer_clock=clock
     )
@@ -267,7 +267,7 @@ def test_future_within_skew_allowance_accepted() -> None:
 def test_stale_is_a_freshness_verdict_not_a_verification_failure() -> None:
     # A genuine, old cosignature: verification PASSES; staleness is separate.
     signed = _signed(WITNESS_A_SEED)
-    old_now = datetime(2026, 7, 4, 13, 0, 0, tzinfo=timezone.utc)  # ~1h later
+    old_now = datetime(2026, 7, 4, 13, 0, 0, tzinfo=UTC)  # ~1h later
     result = cosignature.verify_cosignature(
         signed, checkpoint=CHECKPOINT, witness_public_key=WITNESS_A_PUB, consumer_clock=old_now
     )
@@ -329,7 +329,7 @@ def test_two_distinct_witnesses_yield_2_witnessed() -> None:
         checkpoint=CHECKPOINT,
         witness_public_keys=keys,
         trusted_witnesses=list(keys),
-        consumer_clock=datetime(2026, 7, 4, 12, 3, 1, tzinfo=timezone.utc),
+        consumer_clock=datetime(2026, 7, 4, 12, 3, 1, tzinfo=UTC),
     )
     assert quorum.witnessed_count == 2
     assert quorum.meets(2)
@@ -345,7 +345,7 @@ def test_quorum_dedups_same_witness_signing_twice() -> None:
         checkpoint=CHECKPOINT,
         witness_public_keys=keys,
         trusted_witnesses=[WITNESS_A_ID],
-        consumer_clock=datetime(2026, 7, 4, 12, 5, 1, tzinfo=timezone.utc),
+        consumer_clock=datetime(2026, 7, 4, 12, 5, 1, tzinfo=UTC),
     )
     assert quorum.witnessed_count == 1
 
