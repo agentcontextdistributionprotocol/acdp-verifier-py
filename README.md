@@ -67,12 +67,27 @@ silently): SSRF/transport families (`did-ssrf-*`, `data-ref-ssrf-*`,
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 
+# Format and lint (the same two gates CI enforces, in the same order)
+.venv/bin/ruff format --check .   # `ruff format .` (no --check) applies the fix
+.venv/bin/ruff check .
+
 # Conformance pack (exits nonzero on any FAIL)
 .venv/bin/python run_conformance.py --spec-dir ../agentcontextdistributionprotocol
 
 # Unit tests and type checking
 .venv/bin/python -m pytest
 .venv/bin/python -m mypy
+
+# Coverage gate (fail_under lives in pyproject.toml, so this matches CI
+# exactly). Clear stale coverage data first — a leftover .coverage.* file
+# from an earlier run gets silently merged into the total below.
+# [tool.coverage.run] parallel = true means each `coverage run` below writes
+# its own .coverage.* file — `combine` must run before `report`, or `report`
+# silently reports the wrong number instead of erroring.
+rm -f .coverage .coverage.*
+.venv/bin/coverage run run_conformance.py --spec-dir ../agentcontextdistributionprotocol
+.venv/bin/coverage run -m pytest -q
+.venv/bin/coverage combine && .venv/bin/coverage report
 
 # Interop check: fully verify a publish-request file (hash + signature)
 .venv/bin/python interop_check.py samples/sig-001-publish-request.json \
@@ -86,6 +101,11 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/python interop_check_cosignature.py samples/witness-cosignature-rs.json \
     --did-doc samples/witness-did-rs.json
 ```
+
+This repo ships `.git-blame-ignore-revs` (formatting-only commits). GitHub
+applies it automatically in its blame view, but plain `git blame` does not —
+run `git config blame.ignoreRevsFile .git-blame-ignore-revs` once locally to
+get the same effect.
 
 Current conformance status: **90 in-scope fixtures PASS, 0 FAIL, 54 SKIP
 (explicit out-of-scope markers), 144 total** — including every golden vector
