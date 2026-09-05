@@ -30,9 +30,7 @@ from acdp_verifier.errors import AcdpError
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "cosignature", type=Path, help="acdp-log-cosignature JSON file"
-    )
+    parser.add_argument("cosignature", type=Path, help="acdp-log-cosignature JSON file")
     parser.add_argument(
         "--did-doc",
         action="append",

@@ -122,9 +122,7 @@ def _extract_key(vm: Mapping[str, Any]) -> tuple[str, bytes]:
                 raise KeyResolutionFailed("P-256 JWK coordinates must be 32 bytes each")
             return "ecdsa-p256", b"\x04" + x_bytes + y_bytes
         raise KeyResolutionFailed(f"unsupported JWK kty/crv: {kty!r}/{jwk.get('crv')!r}")
-    raise KeyResolutionFailed(
-        "verificationMethod has neither publicKeyMultibase nor publicKeyJwk"
-    )
+    raise KeyResolutionFailed("verificationMethod has neither publicKeyMultibase nor publicKeyJwk")
 
 
 _TYPE_ALGORITHM = {
@@ -163,9 +161,7 @@ def resolve_verification_method(
                 entry = candidate
                 break
     if entry is None:
-        raise KeyResolutionFailed(
-            f"no verificationMethod matches fragment #{fragment}"
-        )
+        raise KeyResolutionFailed(f"no verificationMethod matches fragment #{fragment}")
     method_id = str(entry.get("id"))
 
     assertion = did_document.get("assertionMethod")

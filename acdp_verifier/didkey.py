@@ -74,9 +74,7 @@ def _decode_method_specific_id(msid: str) -> ResolvedKey:
     return ResolvedKey(algorithm=algorithm, public_key=key)
 
 
-def resolve_did_key(
-    agent_id: str, key_id: str, signature_algorithm: str
-) -> ResolvedKey:
+def resolve_did_key(agent_id: str, key_id: str, signature_algorithm: str) -> ResolvedKey:
     """Run the §5.11.1 pure resolution algorithm.
 
     Raises :class:`KeyResolutionFailed` for grammar/multibase/multicodec/
@@ -93,13 +91,9 @@ def resolve_did_key(
     if not msid:
         raise KeyResolutionFailed("did:key method-specific identifier is empty")
     if fragment != msid:
-        raise KeyResolutionFailed(
-            "did:key fragment must byte-equal the method-specific identifier"
-        )
+        raise KeyResolutionFailed("did:key fragment must byte-equal the method-specific identifier")
     if did_part != agent_id:
-        raise KeyNotAuthorized(
-            f"signature.key_id DID {did_part!r} != body.agent_id {agent_id!r}"
-        )
+        raise KeyNotAuthorized(f"signature.key_id DID {did_part!r} != body.agent_id {agent_id!r}")
     # Steps 2-4 — multibase, multicodec, key length.
     resolved = _decode_method_specific_id(msid)
     # Step 5 — algorithm consistency.

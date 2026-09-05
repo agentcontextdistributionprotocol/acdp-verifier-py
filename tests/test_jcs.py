@@ -108,7 +108,7 @@ class TestSerialization:
         assert jcs.dumps(obj) == want
 
     def test_string_escapes(self) -> None:
-        assert jcs.dumps("a\"b\\c\b\t\n\f\r\x1f") == '"a\\"b\\\\c\\b\\t\\n\\f\\r\\u001f"'
+        assert jcs.dumps('a"b\\c\b\t\n\f\r\x1f') == '"a\\"b\\\\c\\b\\t\\n\\f\\r\\u001f"'
 
     def test_non_ascii_literal(self) -> None:
         assert jcs.canonicalize({"t": "café — test"}) == '{"t":"café — test"}'.encode()

@@ -165,9 +165,7 @@ class TestDataRef:
 
     def test_structured_location_requires_dotted_scheme(self) -> None:
         with pytest.raises(SchemaViolation):
-            validation.validate_data_ref(
-                {"type": "raw_data", "location": {"broker": "k:9092"}}
-            )
+            validation.validate_data_ref({"type": "raw_data", "location": {"broker": "k:9092"}})
         validation.validate_data_ref(
             {"type": "raw_data", "location": {"scheme": "kafka.offset", "topic": "t"}}
         )
@@ -298,9 +296,7 @@ class TestStatusAndBody:
 
     def test_ctx_id_authority(self) -> None:
         assert (
-            validation.ctx_id_authority(
-                "acdp://reg.example/00000000-0000-4000-8000-000000000001"
-            )
+            validation.ctx_id_authority("acdp://reg.example/00000000-0000-4000-8000-000000000001")
             == "reg.example"
         )
         with pytest.raises(SchemaViolation):

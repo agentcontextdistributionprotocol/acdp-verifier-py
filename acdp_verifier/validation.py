@@ -56,9 +56,7 @@ __all__ = [
 
 DID_RE = re.compile(r"^did:[a-z0-9]+:[A-Za-z0-9._:%-]+$")
 DID_URL_RE = re.compile(r"^did:[a-z0-9]+:[A-Za-z0-9._:#/?=&%-]+$")
-HOSTNAME_RE = re.compile(
-    r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$"
-)
+HOSTNAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$")
 CTX_ID_RE = re.compile(
     r"^acdp://[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*"
     r"/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
@@ -181,16 +179,13 @@ def validate_metadata(metadata: Any) -> None:
     canonical = jcs.canonicalize_any(dict(metadata))
     if len(canonical) > MAX_METADATA_JCS_BYTES:
         raise _fail(
-            f"metadata JCS canonical form is {len(canonical)} bytes "
-            f"(> {MAX_METADATA_JCS_BYTES})"
+            f"metadata JCS canonical form is {len(canonical)} bytes (> {MAX_METADATA_JCS_BYTES})"
         )
 
 
 # --- DataRef (RFC-ACDP-0002 §6.6 checklist) -----------------------------------
 
-_DATA_REF_TYPES = frozenset(
-    {"primary_result", "raw_data", "supporting_info", "derived_data"}
-)
+_DATA_REF_TYPES = frozenset({"primary_result", "raw_data", "supporting_info", "derived_data"})
 # Known optional DataRef fields, all non-nullable (RFC-ACDP-0002 §6.8).
 _DATA_REF_OPTIONAL_STRINGS = ("description", "format", "schema_version")
 # The `embedded` sub-object is CLOSED. The published acdp-data-ref.schema.json
@@ -272,9 +267,7 @@ def validate_data_ref(ref: Any) -> None:
             # Check 5 — structured locator requires a dotted-namespace scheme.
             scheme = location.get("scheme")
             if not isinstance(scheme, str) or not LOCATOR_SCHEME_RE.match(scheme):
-                raise _fail(
-                    "structured data_ref.location requires a dotted-namespace 'scheme'"
-                )
+                raise _fail("structured data_ref.location requires a dotted-namespace 'scheme'")
         else:
             raise _fail("data_ref.location must be a URI string or a locator object")
         return
@@ -284,9 +277,7 @@ def validate_data_ref(ref: Any) -> None:
         raise _fail("data_ref.embedded is not an object")
     extra = set(embedded.keys()) - _EMBEDDED_ALLOWED
     if extra:
-        raise _fail(
-            f"data_ref.embedded is a closed schema; unknown fields: {sorted(extra)}"
-        )
+        raise _fail(f"data_ref.embedded is a closed schema; unknown fields: {sorted(extra)}")
     encoding = embedded.get("encoding")
     if encoding not in _EMBEDDED_ENCODINGS:
         raise _fail(f"embedded.encoding must be one of {sorted(_EMBEDDED_ENCODINGS)}")
@@ -526,9 +517,7 @@ def validate_publish_request(request: Any) -> None:
         raise _fail("publish request is not an object")
     extra = set(request.keys()) - _PUBLISH_ALLOWED
     if extra:
-        raise _fail(
-            f"publish request is a closed schema; unknown fields: {sorted(extra)}"
-        )
+        raise _fail(f"publish request is a closed schema; unknown fields: {sorted(extra)}")
     missing = [field for field in _PUBLISH_REQUIRED if field not in request]
     if missing:
         raise _fail(f"publish request is missing required fields: {missing}")
@@ -541,8 +530,7 @@ def validate_publish_request(request: Any) -> None:
             raise _fail("publish_request.lineage_id is malformed")
         if request.get("version") == 1:
             raise _fail(
-                "first-version publish requests MUST NOT include lineage_id "
-                "(RFC-ACDP-0001 §5.6)"
+                "first-version publish requests MUST NOT include lineage_id (RFC-ACDP-0001 §5.6)"
             )
 
 
@@ -572,9 +560,7 @@ def validate_body(body: Any) -> None:
             f"body.origin_registry must be a bare DNS hostname (no DID, no port): {origin!r}"
         )
     if origin != authority:
-        raise _fail(
-            f"body.origin_registry {origin!r} != ctx_id authority {authority!r}"
-        )
+        raise _fail(f"body.origin_registry {origin!r} != ctx_id authority {authority!r}")
 
     created_at = _require_str(body, "created_at", "body")
     if not is_rfc3339_utc(created_at):
@@ -668,15 +654,11 @@ def validate_capabilities(caps: Any, *, fetched_authority: str | None = None) ->
     if ttl_present:
         ttl = limits["idempotency_key_ttl_seconds"]
         if not isinstance(ttl, int) or isinstance(ttl, bool):
-            raise _fail(
-                "limits.idempotency_key_ttl_seconds must be an integer (null forbidden)"
-            )
+            raise _fail("limits.idempotency_key_ttl_seconds must be an integer (null forbidden)")
         if not (86400 <= ttl <= 604800):
             raise _fail("limits.idempotency_key_ttl_seconds must be in [86400, 604800]")
     if supports_idem is True and not ttl_present:
-        raise _fail(
-            "supports_idempotency_key true requires limits.idempotency_key_ttl_seconds"
-        )
+        raise _fail("supports_idempotency_key true requires limits.idempotency_key_ttl_seconds")
 
     # Item 10 (0.3.0) — idempotency is REQUIRED at acdp_version >= 0.3.0.
     if compare_semver(acdp_version, "0.3.0") >= 0 and supports_idem is not True:
@@ -705,9 +687,7 @@ def validate_publish_response(response: Any, *, allow_receipt: bool = True) -> N
     allowed = _PUBLISH_RESPONSE_ALLOWED if allow_receipt else frozenset(_PUBLISH_RESPONSE_REQUIRED)
     extra = set(response.keys()) - allowed
     if extra:
-        raise _fail(
-            f"publish response is a closed schema; unknown fields: {sorted(extra)}"
-        )
+        raise _fail(f"publish response is a closed schema; unknown fields: {sorted(extra)}")
     missing = [field for field in _PUBLISH_RESPONSE_REQUIRED if field not in response]
     if missing:
         raise _fail(f"publish response is missing required fields: {missing}")
@@ -724,7 +704,15 @@ def validate_publish_response(response: Any, *, allow_receipt: bool = True) -> N
     validate_status(response.get("status"))
 
 
-_MATCH_SUMMARY_REQUIRED = ("ctx_id", "lineage_id", "type", "agent_id", "title", "created_at", "status")
+_MATCH_SUMMARY_REQUIRED = (
+    "ctx_id",
+    "lineage_id",
+    "type",
+    "agent_id",
+    "title",
+    "created_at",
+    "status",
+)
 _MATCH_SUMMARY_ALLOWED = frozenset(_MATCH_SUMMARY_REQUIRED + ("summary", "domain", "visibility"))
 
 

@@ -29,7 +29,9 @@ class RevocationStatement:
 class BoundaryVerdict(Enum):
     """RFC-ACDP-0014 §7 outcome for a context signed by a revoked key."""
 
-    HISTORICALLY_AUTHORIZED_PRE_COMPROMISE = "historically_authorized_pre_compromise_receipt_attested"
+    HISTORICALLY_AUTHORIZED_PRE_COMPROMISE = (
+        "historically_authorized_pre_compromise_receipt_attested"
+    )
     FAIL_CLOSED_IN_WINDOW = "fail_closed_at_or_after_boundary"
     FAIL_CLOSED_TIME_UNVERIFIABLE = "fail_closed_publish_time_unverifiable"
 
@@ -82,9 +84,7 @@ def validate_revocation_shape(body: Mapping[str, Any]) -> RevocationStatement:
     )
 
 
-def check_not_self_signed(
-    statement: RevocationStatement, resolved_signer_fingerprint: str
-) -> None:
+def check_not_self_signed(statement: RevocationStatement, resolved_signer_fingerprint: str) -> None:
     """RFC-ACDP-0014 §5 step 2: a revocation signed by the revoked key is void."""
     if resolved_signer_fingerprint == statement.revoked_key_fingerprint:
         raise KeyNotAuthorized(
@@ -93,9 +93,7 @@ def check_not_self_signed(
         )
 
 
-def check_controller_binding(
-    statement: RevocationStatement, body_agent_id: str
-) -> None:
+def check_controller_binding(statement: RevocationStatement, body_agent_id: str) -> None:
     """RFC-ACDP-0014 §5 step 3 (producer-signed class)."""
     if statement.controller != body_agent_id:
         raise SchemaViolation(

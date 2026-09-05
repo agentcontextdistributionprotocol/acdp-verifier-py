@@ -112,11 +112,16 @@ def _validate_receipt_shape(receipt: Mapping[str, Any]) -> None:
     if keys != _RECEIPT_REQUIRED:
         missing = sorted(_RECEIPT_REQUIRED - keys)
         extra = sorted(keys - _RECEIPT_REQUIRED)
-        raise InvalidReceipt(
-            f"receipt is a closed 8-field schema; missing={missing} extra={extra}"
-        )
-    for field in ("registry_did", "ctx_id", "lineage_id", "origin_registry",
-                  "created_at", "content_hash", "key_fingerprint"):
+        raise InvalidReceipt(f"receipt is a closed 8-field schema; missing={missing} extra={extra}")
+    for field in (
+        "registry_did",
+        "ctx_id",
+        "lineage_id",
+        "origin_registry",
+        "created_at",
+        "content_hash",
+        "key_fingerprint",
+    ):
         if not isinstance(receipt[field], str):
             raise InvalidReceipt(f"receipt.{field} is not a string")
     try:
@@ -149,9 +154,7 @@ def verify_receipt(
     # A failure of ANY step is a verification failure of the receipt and is
     # surfaced with the invalid_receipt category (RFC-ACDP-0010 §8).
     try:
-        computed_hash = verify_signature_envelope(
-            receipt, public_key=registry_public_key
-        )
+        computed_hash = verify_signature_envelope(receipt, public_key=registry_public_key)
     except InvalidReceipt:
         raise
     except Exception as exc:
@@ -179,9 +182,7 @@ def verify_receipt(
         raise InvalidReceipt("receipt.origin_registry is not a bare hostname")
     receipt_ctx_authority = ctx_id_authority(str(receipt["ctx_id"]))
     if origin != receipt_ctx_authority or origin != did_authority:
-        raise InvalidReceipt(
-            "receipt origin_registry / ctx_id authority / registry_did disagree"
-        )
+        raise InvalidReceipt("receipt origin_registry / ctx_id authority / registry_did disagree")
 
     # Step 3 — context binding.
     if receipt["ctx_id"] != expected_ctx_id:
@@ -219,9 +220,7 @@ def verify_receipt(
 
     # Step 6 — timestamp form.
     if not is_canonical_ms(str(receipt["created_at"])):
-        raise InvalidReceipt(
-            "receipt.created_at is not canonical millisecond RFC 3339 UTC"
-        )
+        raise InvalidReceipt("receipt.created_at is not canonical millisecond RFC 3339 UTC")
 
     return ReceiptVerification(
         receipt_hash=computed_hash,

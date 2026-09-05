@@ -112,9 +112,7 @@ def strip_annotations(value: Any) -> Any:
     """Drop fixture-annotation members (keys starting with '_') recursively."""
     if isinstance(value, dict):
         return {
-            key: strip_annotations(item)
-            for key, item in value.items()
-            if not key.startswith("_")
+            key: strip_annotations(item) for key, item in value.items() if not key.startswith("_")
         }
     if isinstance(value, list):
         return [strip_annotations(item) for item in value]
@@ -168,21 +166,15 @@ class SpecContext:
         sig001 = self.fixture("sig-001")
         vector = sig001["vectors"][0]
         body: JsonObj = dict(vector["expected"]["publish_request_body"])
-        registry_assigned = {
-            k: v for k, v in vector["registry_assigned"].items() if k != "note"
-        }
+        registry_assigned = {k: v for k, v in vector["registry_assigned"].items() if k != "note"}
         body.update(registry_assigned)
         return body
 
     def registry_seed(self) -> bytes:
-        return bytes.fromhex(
-            self.fixture("rcpt-001")["registry_test_keypair"]["private_seed_hex"]
-        )
+        return bytes.fromhex(self.fixture("rcpt-001")["registry_test_keypair"]["private_seed_hex"])
 
     def registry_public_key(self) -> bytes:
-        return bytes.fromhex(
-            self.fixture("rcpt-001")["registry_test_keypair"]["public_key_hex"]
-        )
+        return bytes.fromhex(self.fixture("rcpt-001")["registry_test_keypair"]["public_key_hex"])
 
     def rcpt001_receipt(self) -> JsonObj:
         receipt = self.fixture("rcpt-001")["vectors"][0]["expected"]["registry_receipt"]
@@ -274,7 +266,9 @@ def run_can_007(fixture: JsonObj, ctx: SpecContext) -> None:
             # Floor-truncate the clock to milliseconds and compare.
             instant = parse_rfc3339(clock)
             floored = instant.replace(microsecond=(instant.microsecond // 1000) * 1000)
-            canonical = floored.strftime("%Y-%m-%dT%H:%M:%S.") + f"{floored.microsecond // 1000:03d}Z"
+            canonical = (
+                floored.strftime("%Y-%m-%dT%H:%M:%S.") + f"{floored.microsecond // 1000:03d}Z"
+            )
             conformant = created_at == canonical
         else:
             no_frac = bool(RFC3339_RE.match(created_at)) and "." not in created_at
@@ -624,9 +618,7 @@ def run_rot_001(fixture: JsonObj, ctx: SpecContext) -> None:
     # Scenario C — K1 removed from verificationMethod entirely -> fail closed.
     gutted = dict(did_doc)
     gutted["verificationMethod"] = [
-        vm
-        for vm in did_doc["verificationMethod"]
-        if not str(vm["id"]).endswith("#key-1")
+        vm for vm in did_doc["verificationMethod"] if not str(vm["id"]).endswith("#key-1")
     ]
     expect_code(
         lambda: verify.verify_producer_signature(
@@ -726,15 +718,11 @@ def run_rev_002(fixture: JsonObj, ctx: SpecContext) -> None:
     schedule = receipt_input["created_at_by_scenario"]
 
     # A — receipt-attested publish time before T.
-    a = revocation.classify_against_boundary(
-        statement, receipt_attested_created_at=schedule["A"]
-    )
+    a = revocation.classify_against_boundary(statement, receipt_attested_created_at=schedule["A"])
     check(a is verdicts.HISTORICALLY_AUTHORIZED_PRE_COMPROMISE, f"scenario A verdict: {a}")
 
     # B — at or after T, plus the exact-T edge.
-    b = revocation.classify_against_boundary(
-        statement, receipt_attested_created_at=schedule["B"]
-    )
+    b = revocation.classify_against_boundary(statement, receipt_attested_created_at=schedule["B"])
     check(b is verdicts.FAIL_CLOSED_IN_WINDOW, f"scenario B verdict: {b}")
     at_t = revocation.classify_against_boundary(
         statement, receipt_attested_created_at=statement.compromised_since
@@ -742,9 +730,7 @@ def run_rev_002(fixture: JsonObj, ctx: SpecContext) -> None:
     check(at_t is verdicts.FAIL_CLOSED_IN_WINDOW, "created_at == T must fail closed")
 
     # C — no verifiable publish time.
-    c = revocation.classify_against_boundary(
-        statement, receipt_attested_created_at=schedule["C"]
-    )
+    c = revocation.classify_against_boundary(statement, receipt_attested_created_at=schedule["C"])
     check(c is verdicts.FAIL_CLOSED_TIME_UNVERIFIABLE, f"scenario C verdict: {c}")
 
     # D — trust classes distinguishable: registry-attested carries an explicit
@@ -762,9 +748,7 @@ def run_rev_002(fixture: JsonObj, ctx: SpecContext) -> None:
     check(statement.controller == rev_body["agent_id"], "producer-signed controller binding")
     # Self-signed 'revocation' triggers none of the §7 semantics.
     expect_code(
-        lambda: revocation.check_not_self_signed(
-            statement, statement.revoked_key_fingerprint
-        ),
+        lambda: revocation.check_not_self_signed(statement, statement.revoked_key_fingerprint),
         "key_not_authorized",
         "self-signed revocation is unverified",
     )
@@ -922,8 +906,7 @@ def run_log_001(fixture: JsonObj, ctx: SpecContext) -> None:
     root = translog.merkle_tree_hash(leaf_hashes)
     check(translog.unparse_hash(root) == expected["root_hash"], "tree-size-5 root diverged")
     check(
-        translog.unparse_hash(translog.merkle_tree_hash([]))
-        == expected["empty_tree_root_hash"],
+        translog.unparse_hash(translog.merkle_tree_hash([])) == expected["empty_tree_root_hash"],
         "empty-tree root diverged",
     )
 
@@ -962,9 +945,7 @@ def run_log_001(fixture: JsonObj, ctx: SpecContext) -> None:
     # 7: cross-checks.
     rcpt_hash = receipts.receipt_hash(ctx.rcpt001_receipt())
     check(leaves[0]["receipt_hash"] == rcpt_hash, "leaf 0 receipt_hash != rcpt-001")
-    producer_fp = fingerprint_ed25519(
-        bytes.fromhex(fixture["producer_key"]["public_key_hex"])
-    )
+    producer_fp = fingerprint_ed25519(bytes.fromhex(fixture["producer_key"]["public_key_hex"]))
     for i, leaf in enumerate(leaves):
         check(leaf["key_fingerprint"] == producer_fp, f"leaf {i} fingerprint mismatch")
         check(
@@ -1260,8 +1241,7 @@ def run_wit_002(fixture: JsonObj, ctx: SpecContext) -> None:
     genuine_first_root = translog.parse_hash(log003["first_root_hash"])
     genuine_second_root = translog.parse_hash(log003["second_root_hash"])
     path = [
-        translog.parse_hash(p)
-        for p in log003["consistency_proof_response"]["consistency_path"]
+        translog.parse_hash(p) for p in log003["consistency_proof_response"]["consistency_path"]
     ]
 
     # Premise: the retained head is the genuine size-3 root; the presented root
@@ -1347,7 +1327,10 @@ def run_wit_003(fixture: JsonObj, ctx: SpecContext) -> None:
         witness_keys[witness_id] = public
 
     # Both cosignatures cover ONE tuple but carry DISTINCT witness_id values.
-    tuples = {tuple(c["witnessed_checkpoint"][k] for k in ("log_id", "tree_size", "root_hash")) for c in signed_cosigs}
+    tuples = {
+        tuple(c["witnessed_checkpoint"][k] for k in ("log_id", "tree_size", "root_hash"))
+        for c in signed_cosigs
+    }
     check(len(tuples) == 1, "wit-003: both cosignatures must cover one checkpoint tuple")
     check(len(witness_keys) == 2, "wit-003: witnesses must be distinct")
 
@@ -1452,9 +1435,7 @@ def run_wit_004(fixture: JsonObj, ctx: SpecContext) -> None:
 def run_caps_simple(fixture: JsonObj, ctx: SpecContext) -> None:
     doc = fixture["input"]["response_body"]
     outcome = fixture["expected"]["outcome"]
-    call = lambda: validation.validate_capabilities(
-        doc, fetched_authority=REGISTRY_AUTHORITY
-    )
+    call = lambda: validation.validate_capabilities(doc, fetched_authority=REGISTRY_AUTHORITY)
     if outcome == "accept":
         expect_accept(call, fixture["id"])
     else:
@@ -1472,9 +1453,7 @@ def run_caps_007(fixture: JsonObj, ctx: SpecContext) -> None:
         mutated = json.loads(json.dumps(doc))
         mutated["limits"]["max_publish_per_minute"] = override
         expect_code(
-            lambda: validation.validate_capabilities(
-                mutated, fetched_authority=REGISTRY_AUTHORITY
-            ),
+            lambda: validation.validate_capabilities(mutated, fetched_authority=REGISTRY_AUTHORITY),
             variant["expected"]["error_code"],
             f"caps-007 reject variant {variant['name']}",
         )
@@ -1528,9 +1507,7 @@ def run_body(fixture: JsonObj, ctx: SpecContext) -> None:
 
     def call() -> None:
         if not validation.HOSTNAME_RE.match(origin):
-            raise SchemaViolation(
-                f"origin_registry is not a bare hostname: {origin!r}"
-            )
+            raise SchemaViolation(f"origin_registry is not a bare hostname: {origin!r}")
         if validation.ctx_id_authority(ctx_id) != origin:
             raise SchemaViolation("origin_registry != ctx_id authority")
 
@@ -1566,9 +1543,7 @@ def run_data_ref_008(fixture: JsonObj, ctx: SpecContext) -> None:
     # never invalid_signature / hash_mismatch — body verdicts stay valid.
     from acdp_verifier.errors import DataRefHashMismatch
 
-    verdict = DataRefHashMismatch(
-        f"fetched bytes hash {fetched_actual} != declared {declared}"
-    )
+    verdict = DataRefHashMismatch(f"fetched bytes hash {fetched_actual} != declared {declared}")
     check(verdict.code == "data_ref_hash_mismatch", "verdict category")
     check(
         verdict.code not in fixture["expected"]["must_not_report"],
@@ -1578,9 +1553,7 @@ def run_data_ref_008(fixture: JsonObj, ctx: SpecContext) -> None:
 
 def run_pub_002(fixture: JsonObj, ctx: SpecContext) -> None:
     body = fixture["input"]["body"]
-    expect_accept(
-        lambda: validation.validate_publish_request(body), "pub-002 schema step"
-    )
+    expect_accept(lambda: validation.validate_publish_request(body), "pub-002 schema step")
     expect_code(
         lambda: hashing.verify_body_content_hash(body),
         fixture["expected"]["error_code"],
@@ -1616,9 +1589,7 @@ def run_pub_007(fixture: JsonObj, ctx: SpecContext) -> None:
     scenario = fixture["scenarios"][0]
     response = scenario["input"]["publish_response"]
     body = response["body"]
-    expect_accept(
-        lambda: validation.validate_publish_response(body), "pub-007 response shape"
-    )
+    expect_accept(lambda: validation.validate_publish_response(body), "pub-007 response shape")
     required = fixture["expected"]["response_body_shape"]["required_fields"]
     check(set(body.keys()) == set(required), "response must carry exactly the five fields")
     forbidden = fixture["expected"]["response_body_shape"]["forbidden_fields"]
@@ -1669,9 +1640,7 @@ def run_schema_generic(fixture: JsonObj, ctx: SpecContext) -> None:
         elif fid == "schema-009":
             validation.validate_data_period(inp["request_body_excerpt"]["data_period"])
         elif fid == "schema-010":
-            base = json.loads(
-                json.dumps(ctx.fixture("caps-001")["input"]["response_body"])
-            )
+            base = json.loads(json.dumps(ctx.fixture("caps-001")["input"]["response_body"]))
             base["limits"] = inp["response_body_excerpt"]["limits"]
             validation.validate_capabilities(base, fetched_authority=REGISTRY_AUTHORITY)
         elif fid in ("schema-011", "schema-012"):
@@ -1700,9 +1669,7 @@ def run_schema_generic(fixture: JsonObj, ctx: SpecContext) -> None:
 
 def run_anc_001(fixture: JsonObj, ctx: SpecContext) -> None:
     body = fixture["input"]["body"]
-    expect_accept(
-        lambda: validation.validate_publish_request(body), "anc-001 well-formed anchor"
-    )
+    expect_accept(lambda: validation.validate_publish_request(body), "anc-001 well-formed anchor")
 
 
 def run_anc_002(fixture: JsonObj, ctx: SpecContext) -> None:
@@ -1937,9 +1904,7 @@ def run(spec_dir: Path) -> int:
         except CheckFailure as exc:
             results.append(Result(fixture_id, "FAIL", str(exc)))
         except Exception as exc:  # noqa: BLE001 - report, don't crash the run
-            results.append(
-                Result(fixture_id, "FAIL", f"{type(exc).__name__}: {exc}")
-            )
+            results.append(Result(fixture_id, "FAIL", f"{type(exc).__name__}: {exc}"))
 
     # Spec examples, end to end.
     for name, fn in (

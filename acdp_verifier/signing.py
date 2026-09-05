@@ -58,13 +58,9 @@ def verify_ed25519(public_key: bytes, preimage: str, signature: bytes) -> None:
     if len(public_key) != 32:
         raise InvalidSignature("Ed25519 public key must be exactly 32 bytes")
     if len(signature) != 64:
-        raise InvalidSignature(
-            f"Ed25519 signature must be 64 bytes, got {len(signature)}"
-        )
+        raise InvalidSignature(f"Ed25519 signature must be 64 bytes, got {len(signature)}")
     try:
-        Ed25519PublicKey.from_public_bytes(public_key).verify(
-            signature, preimage.encode("ascii")
-        )
+        Ed25519PublicKey.from_public_bytes(public_key).verify(signature, preimage.encode("ascii"))
     except _CryptoInvalidSignature as exc:
         raise InvalidSignature("Ed25519 signature does not verify") from exc
 
@@ -98,9 +94,7 @@ def p256_public_key_from_sec1(point: bytes) -> ec.EllipticCurvePublicKey:
     return ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), point)
 
 
-def verify_p256(
-    public_key: ec.EllipticCurvePublicKey, preimage: str, signature: bytes
-) -> None:
+def verify_p256(public_key: ec.EllipticCurvePublicKey, preimage: str, signature: bytes) -> None:
     """Verify an ECDSA-P256 signature in IEEE 1363 ``r||s`` wire form.
 
     A signature whose byte length is not exactly 64 (e.g. a DER blob) is

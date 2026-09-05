@@ -12,9 +12,7 @@ from acdp_verifier.errors import (
     KeyResolutionFailed,
 )
 
-SIG003_PUBLIC = bytes.fromhex(
-    "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12"
-)
+SIG003_PUBLIC = bytes.fromhex("2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12")
 SIG003_DID = "did:key:z6MkghLt1e8m1fmANsdJJco3aCLV8Xnigr5UWwC3u5iZFPd3"
 
 
@@ -33,7 +31,7 @@ class TestDidKey:
         assert didkey.did_key_from_ed25519(SIG003_PUBLIC) == SIG003_DID
 
     def test_pure_resolution_golden(self) -> None:
-        key_id = f"{SIG003_DID}#{SIG003_DID[len('did:key:'):]}"
+        key_id = f"{SIG003_DID}#{SIG003_DID[len('did:key:') :]}"
         resolved = didkey.resolve_did_key(SIG003_DID, key_id, "ed25519")
         assert resolved.algorithm == "ed25519"
         assert resolved.public_key == SIG003_PUBLIC
@@ -55,7 +53,7 @@ class TestDidKey:
     def test_wrong_multibase_prefix(self) -> None:
         did = "did:key:f6d6b6579206e6f74206d756c746962617365"
         with pytest.raises(KeyResolutionFailed):
-            didkey.resolve_did_key(did, f"{did}#{did[len('did:key:'):]}", "ed25519")
+            didkey.resolve_did_key(did, f"{did}#{did[len('did:key:') :]}", "ed25519")
 
     def test_wrong_multicodec_prefix(self) -> None:
         # secp256k1 multicodec 0xe701 over the sig-003 key bytes (dk-001).

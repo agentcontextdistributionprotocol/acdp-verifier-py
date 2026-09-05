@@ -51,7 +51,9 @@ GOLDEN_SIG_B64 = (
 CLOCK = datetime(2026, 7, 4, 12, 0, 6, tzinfo=timezone.utc)
 
 
-def _unsigned(witness_id: str = WITNESS_A_ID, witnessed_at: str = "2026-07-04T12:00:05.000Z") -> dict[str, Any]:
+def _unsigned(
+    witness_id: str = WITNESS_A_ID, witnessed_at: str = "2026-07-04T12:00:05.000Z"
+) -> dict[str, Any]:
     return {
         "cosignature_version": "acdp-cosig/1",
         "witness_id": witness_id,
@@ -139,12 +141,10 @@ def test_verify_did_key_witness() -> None:
     got_hash = cosignature.cosignature_hash(unsigned)
     unsigned["signature"] = {
         "algorithm": "ed25519",
-        "key_id": f"{witness_did}#{witness_did[len('did:key:'):]}",
+        "key_id": f"{witness_did}#{witness_did[len('did:key:') :]}",
         "value": base64.b64encode(signing.sign_ed25519(WITNESS_A_SEED, got_hash)).decode(),
     }
-    result = cosignature.verify_cosignature(
-        unsigned, checkpoint=CHECKPOINT, consumer_clock=CLOCK
-    )
+    result = cosignature.verify_cosignature(unsigned, checkpoint=CHECKPOINT, consumer_clock=CLOCK)
     assert result.witness_id == witness_did
 
 
@@ -273,9 +273,7 @@ def test_stale_is_a_freshness_verdict_not_a_verification_failure() -> None:
     )
     assert result.witness_id == WITNESS_A_ID
     assert cosignature.is_stale("2026-07-04T12:00:05.000Z", consumer_clock=old_now) is True
-    assert (
-        cosignature.is_stale("2026-07-04T12:59:30.000Z", consumer_clock=old_now) is False
-    )
+    assert cosignature.is_stale("2026-07-04T12:59:30.000Z", consumer_clock=old_now) is False
 
 
 # --- schema-closed parse -----------------------------------------------------
@@ -322,7 +320,9 @@ def test_non_canonical_witnessed_at_rejected() -> None:
 
 def test_two_distinct_witnesses_yield_2_witnessed() -> None:
     a = _signed(WITNESS_A_SEED, WITNESS_A_ID)
-    b = _signed(WITNESS_B_SEED, "did:web:witness-2.example.org", witnessed_at="2026-07-04T12:03:00.000Z")
+    b = _signed(
+        WITNESS_B_SEED, "did:web:witness-2.example.org", witnessed_at="2026-07-04T12:03:00.000Z"
+    )
     keys = {WITNESS_A_ID: WITNESS_A_PUB, "did:web:witness-2.example.org": WITNESS_B_PUB}
     quorum = cosignature.evaluate_quorum(
         [a, b],

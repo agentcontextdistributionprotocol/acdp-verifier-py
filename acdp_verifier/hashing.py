@@ -58,9 +58,7 @@ def verify_body_content_hash(raw_body: Mapping[str, Any]) -> str:
         raise SchemaViolation("body.content_hash missing or not a string")
     recomputed = content_hash(producer_content(raw_body))
     if recomputed != claimed:
-        raise HashMismatch(
-            f"recomputed ProducerContent hash {recomputed} != claimed {claimed}"
-        )
+        raise HashMismatch(f"recomputed ProducerContent hash {recomputed} != claimed {claimed}")
     return recomputed
 
 

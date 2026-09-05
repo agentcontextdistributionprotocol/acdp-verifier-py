@@ -18,9 +18,7 @@ from acdp_verifier.fingerprint import (
 
 SIG001_HASH = "sha256:f170150ddbf59d99794e7797824591b374d459782084597b644ecc57a41031b5"
 SIG001_SEED = bytes(32)
-SIG001_PUBLIC = bytes.fromhex(
-    "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
-)
+SIG001_PUBLIC = bytes.fromhex("3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29")
 SIG001_SIGNATURE_B64 = (
     "ErkbV+FUdn49TgF3zJ3RBe3AmyGxLVAQdMjlhabUfM96qendmWwdVodX/SV3O3aKLypbUu6gmb5Npt3O/w7nDQ=="
 )
