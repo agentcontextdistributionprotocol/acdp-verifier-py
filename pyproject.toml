@@ -38,7 +38,13 @@ Specification = "https://github.com/agentcontextdistributionprotocol/agentcontex
 Issues = "https://github.com/agentcontextdistributionprotocol/acdp-verifier-py/issues"
 
 [project.optional-dependencies]
-dev = ["pytest>=9.1.1", "mypy>=2.3.1"]
+# ruff is pinned exactly (not >=): a linter's rule set changes between
+# releases, so a floor here would let a future ruff release turn this
+# repo's CI red with no commit of ours to blame.
+# coverage[toml] makes the TOML-config dependency explicit; it is a no-op
+# on Python >= 3.11, where tomllib is stdlib and coverage reads this file
+# natively.
+dev = ["pytest>=9.1.1", "mypy>=2.3.1", "ruff==0.16.6", "coverage[toml]>=7.16.0"]
 
 [tool.setuptools.packages.find]
 include = ["acdp_verifier*"]
@@ -46,7 +52,52 @@ include = ["acdp_verifier*"]
 [tool.mypy]
 strict = true
 python_version = "3.11"
-files = ["acdp_verifier", "run_conformance.py", "interop_check.py", "tests"]
+files = [
+    "acdp_verifier",
+    "run_conformance.py",
+    "interop_check.py",
+    "interop_check_cosignature.py",
+    "tests",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "BLE", "C4", "SIM", "RUF", "DTZ", "EXE", "PIE", "PT", "RET", "TID"]
+# E501: ruff format owns line length; enabling both makes the formatter and
+# the linter fight over strings/comments the formatter cannot split.
+# W191: ruff format owns indentation; enabling both invites the same kind
+# of formatter/linter conflict as E501 (ruff's own docs recommend against
+# pairing W191 with the formatter).
+# RUF002/RUF003: this repo's docstrings deliberately quote the spec's own
+# typography (x, arrow, en-dashes), so ambiguous-unicode warnings are noise.
+# BLE is selected deliberately so the existing `# noqa: BLE001` markers stay
+# meaningful — removing BLE from select would make those markers dead code.
+ignore = ["E501", "W191", "RUF002", "RUF003"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["acdp_verifier"]
+# In config, not a CI-only flag, so a local run and a CI run behave
+# identically. This means data lands in .coverage.* files and
+# `coverage combine` is required before `coverage report`.
+parallel = true
+# Deliberately not enabled: the gate measures statement coverage, and
+# turning this on would change the measured number, invalidating the
+# calibrated fail_under ratchet below. That should be a separate, deliberate
+# decision, not a silent default flip.
+branch = false
+
+[tool.coverage.report]
+# Measured combined coverage (unit tests + conformance) is 83.97%
+# (1372/1634 statements), identical on py3.11 and py3.14. 83 with
+# precision 2 avoids a rounding trap at the default precision 0.
+# This is a RATCHET: raise it when coverage genuinely improves, never
+# lower it to make a red build green.
+fail_under = 83
+precision = 2
+show_missing = true
