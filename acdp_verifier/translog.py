@@ -115,12 +115,8 @@ def compute_inclusion_path(index: int, leaf_hashes: Sequence[bytes]) -> list[byt
         return []
     k = _largest_power_of_two_less_than(n)
     if index < k:
-        return compute_inclusion_path(index, leaf_hashes[:k]) + [
-            merkle_tree_hash(leaf_hashes[k:])
-        ]
-    return compute_inclusion_path(index - k, leaf_hashes[k:]) + [
-        merkle_tree_hash(leaf_hashes[:k])
-    ]
+        return compute_inclusion_path(index, leaf_hashes[:k]) + [merkle_tree_hash(leaf_hashes[k:])]
+    return compute_inclusion_path(index - k, leaf_hashes[k:]) + [merkle_tree_hash(leaf_hashes[:k])]
 
 
 def compute_consistency_path(first: int, leaf_hashes: Sequence[bytes]) -> list[bytes]:
@@ -155,9 +151,7 @@ def verify_inclusion(
 ) -> None:
     """RFC-ACDP-0012 §9.1 steps 5-6 (the RFC 9162 §2.1.3.2 fold)."""
     if not (0 <= leaf_index < tree_size):
-        raise InvalidLogProof(
-            f"leaf_index {leaf_index} out of range for tree_size {tree_size}"
-        )
+        raise InvalidLogProof(f"leaf_index {leaf_index} out of range for tree_size {tree_size}")
     fn = leaf_index
     sn = tree_size - 1
     r = leaf_hash_value
@@ -178,8 +172,7 @@ def verify_inclusion(
         raise InvalidLogProof("inclusion path exhausted before reaching the root")
     if r != root_hash:
         raise InvalidLogProof(
-            f"inclusion fold yields {unparse_hash(r)}, checkpoint root is "
-            f"{unparse_hash(root_hash)}"
+            f"inclusion fold yields {unparse_hash(r)}, checkpoint root is {unparse_hash(root_hash)}"
         )
 
 
@@ -229,8 +222,7 @@ def verify_consistency(
 
     if fr != first_root:
         raise InvalidLogProof(
-            f"consistency fold first root {unparse_hash(fr)} != retained "
-            f"{unparse_hash(first_root)}"
+            f"consistency fold first root {unparse_hash(fr)} != retained {unparse_hash(first_root)}"
         )
     if sr != second_root:
         raise InvalidLogProof(
@@ -269,9 +261,7 @@ def verify_checkpoint(
 
     # Step 2 — recompute preimage and verify signature.
     try:
-        computed_hash = verify_signature_envelope(
-            checkpoint, public_key=registry_public_key
-        )
+        computed_hash = verify_signature_envelope(checkpoint, public_key=registry_public_key)
     except Exception as exc:
         raise InvalidLogProof(f"checkpoint signature failure: {exc}") from exc
 

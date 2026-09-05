@@ -52,9 +52,7 @@ def verify_head_receipt(
     if keys != _REQUIRED:
         missing = sorted(_REQUIRED - keys)
         extra = sorted(keys - _REQUIRED)
-        raise InvalidReceipt(
-            f"head receipt is a closed schema; missing={missing} extra={extra}"
-        )
+        raise InvalidReceipt(f"head receipt is a closed schema; missing={missing} extra={extra}")
     if receipt["receipt_version"] != RECEIPT_VERSION:
         raise InvalidReceipt(
             f"receipt_version must be {RECEIPT_VERSION!r}; got {receipt['receipt_version']!r}"
@@ -79,9 +77,7 @@ def verify_head_receipt(
     # Step 2 — recompute preimage, verify signature. Any failure is a
     # verification failure of the head receipt (invalid_receipt category).
     try:
-        computed_hash = verify_signature_envelope(
-            receipt, public_key=registry_public_key
-        )
+        computed_hash = verify_signature_envelope(receipt, public_key=registry_public_key)
     except InvalidReceipt:
         raise
     except Exception as exc:
@@ -94,8 +90,7 @@ def verify_head_receipt(
     did_authority = registry_did[len("did:web:") :]
     if did_authority != serving_authority:
         raise InvalidReceipt(
-            f"registry_did authority {did_authority!r} != serving authority "
-            f"{serving_authority!r}"
+            f"registry_did authority {did_authority!r} != serving authority {serving_authority!r}"
         )
     key_did = str(receipt["signature"]["key_id"]).partition("#")[0]
     if key_did != registry_did:
@@ -103,8 +98,7 @@ def verify_head_receipt(
     head_authority = ctx_id_authority(str(receipt["head_ctx_id"]))
     if head_authority != did_authority:
         raise InvalidReceipt(
-            f"head_ctx_id authority {head_authority!r} != registry_did authority "
-            f"{did_authority!r}"
+            f"head_ctx_id authority {head_authority!r} != registry_did authority {did_authority!r}"
         )
 
     # Step 4 — lineage binding.
@@ -112,9 +106,7 @@ def verify_head_receipt(
     if not LINEAGE_ID_RE.match(lineage):
         raise InvalidReceipt("lineage_id is malformed")
     if lineage != expected_lineage_id:
-        raise InvalidReceipt(
-            f"receipt lineage_id {lineage!r} != expected {expected_lineage_id!r}"
-        )
+        raise InvalidReceipt(f"receipt lineage_id {lineage!r} != expected {expected_lineage_id!r}")
 
     # Step 5 / 5b — head binding against the accompanying response.
     if body is not None:

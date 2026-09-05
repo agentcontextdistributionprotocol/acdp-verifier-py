@@ -14,9 +14,7 @@ from acdp_verifier.hashing import sha256_prefixed
 from acdp_verifier.timeutil import parse_rfc3339
 
 REGISTRY_SEED = bytes([0x11] * 32)
-REGISTRY_PUBLIC = bytes.fromhex(
-    "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
-)
+REGISTRY_PUBLIC = bytes.fromhex("d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737")
 PRODUCER_FP = "sha256:139e3940e64b5491722088d9a0d741628fc826e09475d341a780acde3c4b8070"
 
 RECEIPT_UNSIGNED: dict[str, Any] = {
@@ -172,9 +170,7 @@ class TestHeadReceipt:
             "version": 2,
         }
         with pytest.raises(InvalidReceipt):
-            self._verify(
-                signed_head_receipt(), body=body, registry_state={"status": "active"}
-            )
+            self._verify(signed_head_receipt(), body=body, registry_state={"status": "active"})
 
     def test_head_binding_5b_superseded_ok(self) -> None:
         # Receipt names a NEWER head; retrieved context is superseded: fine.
@@ -194,9 +190,7 @@ class TestHeadReceipt:
     def test_future_as_of_fails(self) -> None:
         receipt = signed_head_receipt(as_of="2036-01-01T00:00:00.000Z")
         with pytest.raises(InvalidReceipt):
-            self._verify(
-                receipt, consumer_clock=parse_rfc3339("2026-07-04T09:00:00.000Z")
-            )
+            self._verify(receipt, consumer_clock=parse_rfc3339("2026-07-04T09:00:00.000Z"))
 
     def test_as_of_within_skew_ok(self) -> None:
         clock = parse_rfc3339("2026-07-04T09:00:00.000Z")
@@ -253,9 +247,7 @@ class TestRevocation:
             statement, receipt_attested_created_at="2026-05-02T00:00:00.000Z"
         )
         assert after is v.FAIL_CLOSED_IN_WINDOW
-        none = revocation.classify_against_boundary(
-            statement, receipt_attested_created_at=None
-        )
+        none = revocation.classify_against_boundary(statement, receipt_attested_created_at=None)
         assert none is v.FAIL_CLOSED_TIME_UNVERIFIABLE
 
     def test_earliest_boundary_across_lineage(self) -> None:

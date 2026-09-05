@@ -59,14 +59,10 @@ COSIGNATURE_FIELDS = frozenset(
         "signature",
     }
 )
-WITNESSED_CHECKPOINT_FIELDS = frozenset(
-    {"log_id", "tree_size", "root_hash", "timestamp"}
-)
+WITNESSED_CHECKPOINT_FIELDS = frozenset({"log_id", "tree_size", "root_hash", "timestamp"})
 
 # Schema patterns (acdp-log-cosignature.schema.json).
-_WITNESS_ID_RE = re.compile(
-    r"^did:(web:[a-zA-Z0-9.%:-]+|key:z[1-9A-HJ-NP-Za-km-z]+)$"
-)
+_WITNESS_ID_RE = re.compile(r"^did:(web:[a-zA-Z0-9.%:-]+|key:z[1-9A-HJ-NP-Za-km-z]+)$")
 _LOG_ID_RE = re.compile(r"^did:web:[a-zA-Z0-9.%:-]+/log/[a-z0-9-]{1,32}$")
 _ROOT_HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
@@ -155,9 +151,7 @@ def _validate_shape(cosignature: Mapping[str, Any]) -> None:
 
     witnessed_at = cosignature["witnessed_at"]
     if not isinstance(witnessed_at, str) or not is_canonical_ms(witnessed_at):
-        raise InvalidWitnessCosignature(
-            "witnessed_at is not canonical millisecond RFC 3339 UTC"
-        )
+        raise InvalidWitnessCosignature("witnessed_at is not canonical millisecond RFC 3339 UTC")
 
     sig = cosignature["signature"]
     if not isinstance(sig, Mapping):
@@ -256,9 +250,7 @@ def verify_cosignature(
             f"signature.key_id DID {key_did!r} != witness_id {witness_id!r}"
         )
     if trusted_witnesses is not None and witness_id not in trusted_witnesses:
-        raise InvalidWitnessCosignature(
-            f"witness_id {witness_id!r} is not a trusted witness"
-        )
+        raise InvalidWitnessCosignature(f"witness_id {witness_id!r} is not a trusted witness")
 
     # Step 2 — recompute the hash, resolve the WITNESS key, verify the signature.
     computed_hash = cosignature_hash(cosignature)
@@ -278,9 +270,7 @@ def verify_cosignature(
     except InvalidWitnessCosignature:
         raise
     except (InvalidReceipt, InvalidSignature, KeyNotAuthorized, KeyResolutionFailed) as exc:
-        raise InvalidWitnessCosignature(
-            f"witness cosignature does not verify: {exc}"
-        ) from exc
+        raise InvalidWitnessCosignature(f"witness cosignature does not verify: {exc}") from exc
 
     # Step 4 — checkpoint binding.
     if checkpoint is not None:
@@ -290,9 +280,7 @@ def verify_cosignature(
             ("root_hash", root_hash),
         ):
             if field not in checkpoint:
-                raise InvalidWitnessCosignature(
-                    f"checkpoint under evaluation is missing {field!r}"
-                )
+                raise InvalidWitnessCosignature(f"checkpoint under evaluation is missing {field!r}")
             if checkpoint[field] != observed:
                 raise InvalidWitnessCosignature(
                     f"witnessed_checkpoint.{field} {observed!r} != checkpoint "
@@ -317,9 +305,7 @@ def verify_cosignature(
     )
 
 
-def _verify_with_raw_key(
-    cosignature: Mapping[str, Any], algorithm: str, public_key: bytes
-) -> None:
+def _verify_with_raw_key(cosignature: Mapping[str, Any], algorithm: str, public_key: bytes) -> None:
     """Verify signature.value over the ASCII bytes of the cosignature hash.
 
     Reuses the RFC-ACDP-0010 §5 envelope verification (``receipts``) — the
@@ -329,12 +315,9 @@ def _verify_with_raw_key(
     sig = cosignature["signature"]
     if str(sig["algorithm"]) != algorithm:
         raise InvalidWitnessCosignature(
-            f"signature.algorithm {sig['algorithm']!r} != resolved key algorithm "
-            f"{algorithm!r}"
+            f"signature.algorithm {sig['algorithm']!r} != resolved key algorithm {algorithm!r}"
         )
-    verify_signature_envelope(
-        cosignature, public_key=public_key, expected_algorithm=algorithm
-    )
+    verify_signature_envelope(cosignature, public_key=public_key, expected_algorithm=algorithm)
 
 
 def is_stale(
