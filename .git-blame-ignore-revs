@@ -1,0 +1,17 @@
+# Revisions to skip when running `git blame`.
+#
+# These commits changed formatting only — no semantic change — so attributing
+# a line to one of them tells you nothing about who wrote the code or why.
+#
+# GitHub reads this file automatically on the default branch. Git does NOT:
+# enable it locally with
+#
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+#     git config blame.markIgnoredLines true   # optional, marks skipped lines
+#
+# Entries must be full 40-character SHAs — abbreviated ones are rejected — and
+# must stay reachable, which is why this branch merges with merge commits: a
+# squash or rebase merge would rewrite the SHA and leave a dangling reference.
+
+# Apply ruff format across the tree (no semantic change; AST-identical)
+a0c0f5acec6fe9980a34befaabb939d565d2d45a
