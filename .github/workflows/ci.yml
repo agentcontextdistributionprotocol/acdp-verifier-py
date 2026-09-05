@@ -41,12 +41,45 @@ jobs:
       - name: Install
         working-directory: acdp-verifier-py
         run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+      - name: Format (ruff format --check)
+        working-directory: acdp-verifier-py
+        run: ruff format --check .
+      - name: Lint (ruff check, zero warnings)
+        working-directory: acdp-verifier-py
+        run: ruff check .
+      - name: Clear stale coverage data
+        working-directory: acdp-verifier-py
+        # Must run before either coverage-producing step below (Conformance,
+        # Unit tests), not just before whichever happens to run first. When
+        # the `rm` lived inside the Conformance step, its correctness rested
+        # on an invariant recorded only in a comment there: that Conformance
+        # runs before Unit tests. Nothing enforced that. Reorder the two and
+        # the `rm` wipes whichever ran first's data — today that surfaces as
+        # a red build (75.15% < 83), merely misdiagnosed as a coverage
+        # regression, but once either producer alone clears fail_under
+        # (routine as coverage grows) the same reorder yields a *passing*
+        # build silently measuring half of what it claims. A dedicated step
+        # makes the ordering invariant explicit and order-independent.
+        run: rm -f .coverage .coverage.*
       - name: Conformance (independent re-derivation of every golden vector)
         working-directory: acdp-verifier-py
-        run: python run_conformance.py --spec-dir ${{ steps.spec.outputs.path }}
+        run: coverage run run_conformance.py --spec-dir ${{ steps.spec.outputs.path }}
       - name: Unit tests
         working-directory: acdp-verifier-py
-        run: pytest -q
+        run: coverage run -m pytest -q
+      - name: Coverage gate (fail_under from pyproject)
+        working-directory: acdp-verifier-py
+        # [tool.coverage.run] parallel = true means each `coverage run` above
+        # writes its own .coverage.<host>.<pid>.<random> file rather than a
+        # shared .coverage; a bare `coverage report` would auto-combine
+        # destructively, so combining happens once, here, after both runs
+        # have written their data. fail_under lives in [tool.coverage.report]
+        # in pyproject.toml so a local run gates identically to CI; `coverage
+        # report` reads it automatically and exits nonzero when the combined
+        # total is below it.
+        run: |
+          coverage combine
+          coverage report
       - name: Types (mypy --strict)
         working-directory: acdp-verifier-py
         run: mypy
