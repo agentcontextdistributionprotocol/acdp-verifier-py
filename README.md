@@ -9,6 +9,32 @@ see "Project status" below). The first implementation is
 [`acdp-rs`](../acdp-rs); the Python/Node bindings there wrap the same Rust
 core and therefore do not count as independent.
 
+<!-- The paragraph below is a VERBATIM copy of the family's canonical maintenance
+     posture. Canonical lives in the spec repo's README.md, under its own heading of
+     the same name. Regenerate it; never retype it. A hand-typed copy that is 99%
+     right is worse than an obviously stale one, because the diff then reads as a
+     deliberate edit rather than as out-of-date:
+
+         awk '/^## Project status/{f=1;next} f&&NF{print;exit}' \
+             ../agentcontextdistributionprotocol/README.md \
+           | fold -s -w 80 | sed 's/ *$//'
+
+     Anchored on canonical's heading rather than a line number: the paragraph has
+     already moved once (line 22 -> 24 on 2026-09-06), and a line-numbered recipe
+     silently extracts the wrong line instead of failing. Use `fold -s`, not `fmt`:
+     BSD fmt is greedy and GNU fmt is optimal-fit, so fmt wraps differently on
+     different machines. Our 80-column wrap under a heading is deliberate and differs
+     from the .github copy's 81-with-run-in; comparison is whitespace-normalised, so
+     width is cosmetic -- do not "correct" it.
+
+     This copy is REGISTERED in the org .github repo (posture/copies.json) and is
+     compared against canonical weekly. Rewording the paragraph's opening or closing
+     sentence makes that check report MISSING rather than pass quietly. If you copy
+     the paragraph into another repo, register that copy in the same change -- an
+     unregistered copy is compared against nothing and rots silently. If you ever
+     deliberately drop it from this file, say so in that repo so the entry is
+     deregistered rather than left permanently red. -->
+
 ## Project status
 
 ACDP is maintained by a single maintainer on a best-effort basis; changes land
