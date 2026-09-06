@@ -13,13 +13,13 @@ core and therefore do not count as independent.
 
 ACDP is maintained by a single maintainer on a best-effort basis; changes land
 when a consumer needs them, with no SLA. The stable surface is the 0.1.0 /
-0.2.0 / 0.3.0 Final lines, which are wire-frozen. RFC-ACDP-0015 (witness
-cosigning) is Draft on the 0.4.0 line and RFC-ACDP-0009 is Reserved; neither is
-a dependable surface until promoted. Promotion to Final requires the
-conformance pack to pass against two independent implementations (`acdp-rs` and
-`acdp-verifier-py`); the second implementation is therefore part of the
-protocol's governance machinery, not an optional extra. Security reports: see
-SECURITY.md in the org profile.
+0.2.0 / 0.3.0 / 0.4.0 Final lines, which are wire-frozen. RFC-ACDP-0016 (typed
+external anchors) is Draft on the open 0.5.0 line, and RFC-ACDP-0009 is
+Reserved; neither is a dependable surface until promoted. Promotion to Final
+requires the conformance pack to pass against two independent implementations
+(`acdp-rs` and `acdp-verifier-py`); the second implementation is therefore part
+of the protocol's governance machinery, not an optional extra. Security
+reports: see SECURITY.md in the org profile.
 
 This repository is that Final-gate second implementation: if it lapses, every
 future promotion stalls.
@@ -185,42 +185,45 @@ publish fails at the registry rather than succeeding quietly. If an external
 consumer ever needs a wheel, that is a deliberate reversal: drop the
 classifier and add a tag-triggered publish workflow.
 
-## Divergences found (the value of a second implementation)
+## Divergences found (found here, fixed upstream)
 
-1. **`acdp-data-ref.schema.json` forbids `embedded.content_hash` that the
-   RFC prose and fixtures require.** The published schema's `embedded`
-   sub-object is closed over `{encoding, content}` only
-   (`additionalProperties: false`), but RFC-ACDP-0002 §6.6 check 8 reads
-   "If `embedded.content_hash` is present … verify it against the decoded
-   bytes", RFC-ACDP-0002 §6.7 describes `embedded` as a "tightly-scoped
-   wire shape (`encoding`, `content`, optional `content_hash`)", and fixture
-   `data-ref-007` places `content_hash` *inside* `embedded` and expects
-   `data_ref_hash_mismatch` (not `schema_violation`). A validator
-   implementing the schema byte-for-byte rejects data-ref-007's input at
-   the schema step with the wrong code. This implementation follows the
-   RFC prose + fixture: `embedded` is closed over
-   `{encoding, content, content_hash}`. The schema should gain the
-   `content_hash` property (or the fixture should move the hash to the
-   DataRef root, whose own `content_hash` is documented as "for embedded
-   data, computed over decoded bytes").
+This implementation found three spec defects during conformance work. All
+three were fixed upstream in spec commit `390f2d3` (2026-07-05), whose
+message — *"spec: errata found by the second implementation
+(acdp-verifier-py)"* — credits this repo by name. A 2026-09-05 re-triage
+(spec issues #52-#54) then found that sweep incomplete for two of the three;
+the residual work landed in `b8601e2` (2026-09-05, spec PR #55). The full record
+is stronger evidence for the value of a second implementation than an
+open-defect list would be: real defects found, fixed, and — where the first
+fix fell short — caught again on re-triage.
+
+1. **`acdp-data-ref.schema.json` forbade `embedded.content_hash`**, which
+   RFC-ACDP-0002 §6.6 check 8 and §6.7 required and fixture `data-ref-007`
+   exercised: the published schema closed `embedded` over
+   `{encoding, content}` only, so a byte-for-byte validator rejected
+   `data-ref-007`'s input at the schema step instead of returning
+   `data_ref_hash_mismatch`. Fixed in `390f2d3` by adding `content_hash` to
+   the closed `embedded` schema. Re-triage (spec #52) found the fix incomplete:
+   RFC-ACDP-0002 §6.3's own field table still lacked a `content_hash` row,
+   and its disambiguation sentence didn't name `embedded.content_hash`
+   specifically, leaving it readable as the distinct DataRef-root
+   `content_hash` of §6.1. Closed out in `b8601e2`.
 2. **The RFC-ACDP-0003 §4 example publish response (copied into
-   `pub-007`'s scenario) is not derivation-consistent.** It shows a
-   `version: 1` response with
+   `pub-007`'s scenario) was derivation-inconsistent**: it paired
    `ctx_id acdp://registry.example.com/550e8400-e29b-41d4-a716-446655440000`
-   and `lineage_id lin:sha256:b14ccd2a…`, but the §5.6 derivation of that
-   ctx_id is `lin:sha256:ca770dc5d7c41109753bd3d045c2b7bd4cf687ab9cd2552ff17a37bcecbd0810`.
-   For a v1 publish the response lineage MUST derive from the assigned
-   ctx_id, so the illustrative values could never be emitted by a
-   conformant registry. The runner therefore does not assert the
-   derivation against these illustrative values (the fixture's pinned
-   consumer steps — the Location round-trip — are asserted in full).
-3. **`status-001`'s illustrative body is not schema-valid.** The fixture's
-   full-retrieval body omits the REQUIRED `contributors` field
-   (RFC-ACDP-0002 §3.1). Its executable expectation (tolerate the unknown
-   `retracted` status) is unaffected; the runner validates
-   `registry_state` only, as the fixture intends.
+   with `lineage_id lin:sha256:b14ccd2a…`, but that ctx_id's §5.6 derivation
+   is `lin:sha256:ca770dc5d7c41109753bd3d045c2b7bd4cf687ab9cd2552ff17a37bcecbd0810`
+   — a pairing no conformant v1 publish could ever emit. Fixed in `390f2d3`.
+   Re-triage (spec #53) found four further copies of the same disproven pairing
+   surviving elsewhere — RFC-ACDP-0005 §2.2, `vis-003` (×2), and
+   `acdp-common.schema.json`'s `examples[0]` — and added a
+   `check-consistency.py` guard so a partial sweep can't silently recur.
+   Closed out in `b8601e2`.
+3. **`status-001`'s illustrative body was not schema-valid**: it omitted the
+   REQUIRED `contributors` field (RFC-ACDP-0002 §3.1). Fixed in `390f2d3`
+   (spec #54) — fully resolved, no residual.
 
-None of these affect any golden hash, signature, or Merkle value — every
+None of these affected any golden hash, signature, or Merkle value — every
 cryptographic vector reproduced byte-for-byte on both implementations.
 
 **No divergence was found in RFC-ACDP-0015 (witness cosigning).** Implemented
