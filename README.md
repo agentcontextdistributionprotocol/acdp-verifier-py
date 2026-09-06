@@ -82,8 +82,12 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 # exactly). Clear stale coverage data first — a leftover .coverage.* file
 # from an earlier run gets silently merged into the total below.
 # [tool.coverage.run] parallel = true means each `coverage run` below writes
-# its own .coverage.* file — `combine` must run before `report`, or `report`
-# silently reports the wrong number instead of erroring.
+# its own .coverage.* file. `coverage report` auto-combines before reading,
+# so it's safe on its own; `combine` is still run explicitly so a missing
+# producer fails loudly ("No data to combine") instead of silently reporting
+# a partial number, and so .coverage resets instead of accumulating across
+# sessions. Never run `report` between the two `run` steps and then combine
+# — that discards the first run's data.
 rm -f .coverage .coverage.*
 .venv/bin/coverage run run_conformance.py --spec-dir ../agentcontextdistributionprotocol
 .venv/bin/coverage run -m pytest -q
