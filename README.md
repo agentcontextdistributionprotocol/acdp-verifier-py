@@ -17,11 +17,16 @@ core and therefore do not count as independent.
 
          awk '/^## Project status/{f=1;next} f&&NF{print;exit}' \
              ../agentcontextdistributionprotocol/README.md \
-           | fold -s -w 80 | sed 's/ *$//'
+           | fold -s -w 80 | sed 's/ *$//' \
+           | grep . || echo 'EMPTY -- canonical heading renamed or moved?' >&2
 
      Anchored on canonical's heading rather than a line number: the paragraph has
      already moved once (line 22 -> 24 on 2026-09-06), and a line-numbered recipe
-     silently extracts the wrong line instead of failing. Use `fold -s`, not `fmt`:
+     silently extracts the wrong line instead of failing. The trailing `grep .` is
+     the same defence one level up: the drift check anchors on the paragraph's first
+     and last SENTENCES, so if canonical ever renames this heading the check stays
+     green while this recipe quietly extracts nothing -- and empty output is easiest
+     of all to misread as "nothing to update". Use `fold -s`, not `fmt`:
      BSD fmt is greedy and GNU fmt is optimal-fit, so fmt wraps differently on
      different machines. Our 80-column wrap under a heading is deliberate and differs
      from the .github copy's 81-with-run-in; comparison is whitespace-normalised, so
@@ -97,8 +102,14 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/ruff format --check .   # `ruff format .` (no --check) applies the fix
 .venv/bin/ruff check .
 
-# Conformance pack (exits nonzero on any FAIL)
-.venv/bin/python run_conformance.py --spec-dir ../agentcontextdistributionprotocol
+# Conformance pack (exits nonzero on any FAIL). Run it against a worktree pinned
+# to the same spec SHA CI uses. Do NOT point --spec-dir at the live sibling
+# checkout: the spec repo is released several times a day, so the live tree
+# drifts past our pin and the pass/skip counts change for reasons that have
+# nothing to do with this repo -- which is indistinguishable from a regression.
+PIN=$(grep -oE 'ref: [0-9a-f]{40}' .github/workflows/ci.yml | cut -d' ' -f2)
+git -C ../agentcontextdistributionprotocol worktree add --detach "/tmp/acdp-spec-$PIN" "$PIN"
+.venv/bin/python run_conformance.py --spec-dir "/tmp/acdp-spec-$PIN"
 
 # Unit tests and type checking
 .venv/bin/python -m pytest
