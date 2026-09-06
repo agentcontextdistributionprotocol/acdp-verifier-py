@@ -71,12 +71,14 @@ jobs:
         working-directory: acdp-verifier-py
         # [tool.coverage.run] parallel = true means each `coverage run` above
         # writes its own .coverage.<host>.<pid>.<random> file rather than a
-        # shared .coverage; a bare `coverage report` would auto-combine
-        # destructively, so combining happens once, here, after both runs
-        # have written their data. fail_under lives in [tool.coverage.report]
-        # in pyproject.toml so a local run gates identically to CI; `coverage
-        # report` reads it automatically and exits nonzero when the combined
-        # total is below it.
+        # shared .coverage. `coverage report` auto-combines before reading,
+        # so it would be safe on its own here; `combine` still runs
+        # explicitly so a missing producer fails loudly ("No data to
+        # combine") instead of silently reporting a partial number, and so
+        # .coverage resets instead of accumulating across runs. fail_under
+        # lives in [tool.coverage.report] in pyproject.toml so a local run
+        # gates identically to CI; `coverage report` reads it automatically
+        # and exits nonzero when the combined total is below it.
         run: |
           coverage combine
           coverage report
