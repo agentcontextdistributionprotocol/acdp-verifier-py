@@ -11,9 +11,14 @@ updates:
       interval: monthly
     open-pull-requests-limit: 5
     groups:
+      # `patterns` is required for a group to match anything; without it these
+      # two never grouped, so the 2026-08-29 run emitted four separate PRs
+      # (#8-#11) instead of one `major-updates` PR.
       minor-and-patch:
+        patterns: ['*']
         update-types: [minor, patch]
       major-updates:
+        patterns: ['*']
         update-types: [major]
   - package-ecosystem: github-actions
     directory: /
