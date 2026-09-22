@@ -91,7 +91,7 @@ pluggable-store pattern RFC-ACDP-0001 §5.11 recommends).
 **Out of scope** (skipped by the runner with explicit markers, never
 silently): SSRF/transport families (`did-ssrf-*`, `data-ref-ssrf-*`,
 `fed-*`) and live-registry behavioral families (`vis-*`, `ret-*`, `cur-*`,
-`rate-*`, `err-*`, `lc-*`, `idem-001..006`, most `pub-*`).
+`rate-*`, `err-*`, `lc-*`, `idem-001..006`, most `pub-*`, `rev-003`, `rev-004`).
 
 ## How to run
 
