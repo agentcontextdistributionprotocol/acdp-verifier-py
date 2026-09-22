@@ -86,6 +86,8 @@ _SKIP_IDS: dict[str, str] = {
     "idem-004": SKIP_REGISTRY,
     "idem-005": SKIP_REGISTRY,
     "idem-006": SKIP_REGISTRY,
+    "rev-003": SKIP_REGISTRY,
+    "rev-004": SKIP_REGISTRY,
 }
 
 REGISTRY_AUTHORITY = "registry.example.com"
