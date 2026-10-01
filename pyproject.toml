@@ -44,7 +44,7 @@ Issues = "https://github.com/agentcontextdistributionprotocol/acdp-verifier-py/i
 # coverage[toml] makes the TOML-config dependency explicit; it is a no-op
 # on Python >= 3.11, where tomllib is stdlib and coverage reads this file
 # natively.
-dev = ["pytest>=9.1.1", "mypy>=2.3.1", "ruff==0.16.9", "coverage[toml]>=7.16.0"]
+dev = ["pytest>=9.1.1", "mypy>=2.3.1", "ruff==0.16.9", "coverage[toml]>=7.16.2"]
 
 [tool.setuptools.packages.find]
 include = ["acdp_verifier*"]
