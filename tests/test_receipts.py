@@ -9,6 +9,9 @@ from typing import Any
 import pytest
 
 from acdp_verifier import headreceipt, jcs, receipts, revocation, signing
+from acdp_verifier.base58 import b58encode
+from acdp_verifier.didkey import MULTICODEC_ED25519
+from acdp_verifier.didweb import Authorization
 from acdp_verifier.errors import InvalidReceipt, KeyNotAuthorized, SchemaViolation
 from acdp_verifier.hashing import sha256_prefixed
 from acdp_verifier.timeutil import parse_rfc3339
@@ -261,3 +264,99 @@ class TestRevocation:
         body = self._body()
         body["type"] = "acdp:key-revocation"
         revocation.validate_revocation_shape(body)
+
+
+class TestReceiptKeyStatus:
+    """RFC-ACDP-0010 §8 step 1 (0.5.0): current vs historical receipt key."""
+
+    def _document(self, *, assertion: bool, present: bool = True) -> dict[str, Any]:
+        method_id = "did:web:registry.example.com#receipt-key-1"
+        multibase = "z" + b58encode(MULTICODEC_ED25519 + REGISTRY_PUBLIC)
+        methods = [
+            {
+                "id": method_id,
+                "type": "Ed25519VerificationKey2020",
+                "controller": "did:web:registry.example.com",
+                "publicKeyMultibase": multibase,
+            }
+        ]
+        return {
+            "id": "did:web:registry.example.com",
+            "verificationMethod": methods if present else [],
+            "assertionMethod": [method_id] if assertion else [],
+        }
+
+    def test_current_key(self) -> None:
+        key = receipts.resolve_receipt_key(
+            signed_receipt(), registry_did_document=self._document(assertion=True)
+        )
+        assert key.public_key == REGISTRY_PUBLIC
+        assert key.status is Authorization.CURRENT
+
+    def test_historical_key(self) -> None:
+        key = receipts.resolve_receipt_key(
+            signed_receipt(), registry_did_document=self._document(assertion=False)
+        )
+        assert key.status is Authorization.HISTORICAL
+
+    def test_absent_key_is_invalid_receipt(self) -> None:
+        with pytest.raises(InvalidReceipt):
+            receipts.resolve_receipt_key(
+                signed_receipt(),
+                registry_did_document=self._document(assertion=False, present=False),
+            )
+
+    def test_key_from_another_did_is_invalid_receipt(self) -> None:
+        document = self._document(assertion=True)
+        document["id"] = "did:web:other.example.org"
+        with pytest.raises(InvalidReceipt):
+            receipts.resolve_receipt_key(signed_receipt(), registry_did_document=document)
+
+
+class TestRevocationProducerScope:
+    """RFC-ACDP-0014 §7 (0.5.0): a revocation speaks only for its controller."""
+
+    def _statement(self, agent_id: str, controller: str | None = None) -> Any:
+        metadata: dict[str, Any] = {
+            "revoked_key_fingerprint": PRODUCER_FP,
+            "compromised_since": "2026-05-01T00:00:00.000Z",
+        }
+        if controller is not None:
+            metadata["revoked_key_controller"] = controller
+        return revocation.validate_revocation_shape(
+            {
+                "type": "key-revocation",
+                "visibility": "public",
+                "agent_id": agent_id,
+                "metadata": metadata,
+            }
+        )
+
+    def test_same_producer_applies(self) -> None:
+        assert revocation.applies_to(self._statement("did:web:b.example"), "did:web:b.example")
+
+    def test_cross_producer_does_not_apply(self) -> None:
+        statement = self._statement("did:web:attacker.example")
+        assert not revocation.applies_to(statement, "did:web:b.example")
+
+    def test_registry_attested_uses_controller(self) -> None:
+        statement = self._statement("did:web:registry.example.com", "did:web:b.example")
+        assert revocation.applies_to(statement, "did:web:b.example")
+        assert not revocation.applies_to(statement, "did:web:registry.example.com")
+
+    def test_historical_receipt_key_cannot_place_pre_t(self) -> None:
+        statement = self._statement("did:web:b.example")
+        v = revocation.BoundaryVerdict
+        pre_t = "2026-04-30T23:59:59.999Z"
+        current = revocation.classify_against_boundary(
+            statement,
+            receipt_attested_created_at=pre_t,
+            receipt_key_status=Authorization.CURRENT,
+        )
+        assert current is v.HISTORICALLY_AUTHORIZED_PRE_COMPROMISE
+        historical = revocation.classify_against_boundary(
+            statement,
+            receipt_attested_created_at=pre_t,
+            receipt_key_status=Authorization.HISTORICAL,
+        )
+        assert historical is v.FAIL_CLOSED_TIME_UNVERIFIABLE

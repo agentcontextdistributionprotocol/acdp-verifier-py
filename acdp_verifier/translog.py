@@ -11,11 +11,13 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from enum import Enum
 from typing import Any
 
 from . import jcs
-from .errors import InvalidLogProof, SchemaViolation
+from .errors import InvalidLogProof, InvalidReceipt, SchemaViolation
 from .receipts import verify_signature_envelope
 from .timeutil import is_canonical_ms, parse_rfc3339
 from .validation import validate_signature_object
@@ -23,6 +25,8 @@ from .validation import validate_signature_object
 __all__ = [
     "CHECKPOINT_VERSION",
     "LEAF_VERSION",
+    "InclusionVerdict",
+    "ReceiptState",
     "compute_consistency_path",
     "compute_inclusion_path",
     "leaf_hash",
@@ -33,6 +37,7 @@ __all__ = [
     "verify_checkpoint",
     "verify_consistency",
     "verify_inclusion",
+    "verify_log_inclusion",
 ]
 
 LEAF_VERSION = "acdp-log-leaf/1"
@@ -291,3 +296,90 @@ def verify_checkpoint(
             raise InvalidLogProof("checkpoint timestamp is in the future beyond skew")
 
     return computed_hash
+
+
+class ReceiptState(Enum):
+    """What the consumer knows about the context's receipt (§9.1, 0.5.0)."""
+
+    VERIFIED = "verified"  # verified per RFC-ACDP-0010 §8
+    ABSENT = "receipt_absent"
+    INVALID = "receipt_invalid"  # failed RFC-ACDP-0010 §8
+    NOT_VERIFIED = "receipt_not_verified"  # the consumer does not verify receipts
+
+
+@dataclass(frozen=True)
+class InclusionVerdict:
+    """The §9.1 log verdict: ``included`` or ``cannot_verify`` with a reason.
+
+    ``invalid_log_proof`` is raised (:class:`InvalidLogProof`), not returned.
+    ``cannot_verify`` is a report value, not a wire error code.
+    """
+
+    log_inclusion: str
+    reason: str | None = None
+
+
+def verify_log_inclusion(
+    log_inclusion: Mapping[str, Any],
+    *,
+    log_checkpoint: Mapping[str, Any],
+    registry_public_key: bytes,
+    leaf: Mapping[str, Any] | None,
+    receipt_state: ReceiptState,
+    serving_authority: str | None = None,
+    consumer_clock: datetime | None = None,
+    skew_allowance_seconds: int = 120,
+    require_inclusion: bool = False,
+) -> InclusionVerdict:
+    """RFC-ACDP-0012 §9.1 inclusion-proof verification, all six steps.
+
+    ``leaf`` MUST be reconstructed from verified material (step 1): the body's
+    identifiers and ``created_at``, the independently recomputed
+    ``content_hash``, the resolved producer key's fingerprint, and the hash of
+    the receipt verified per RFC-ACDP-0010 §8 — never an echoed ``leaf``.
+
+    *(0.5.0)* Without a verified receipt step 1 cannot be performed: the
+    verdict is ``cannot_verify`` (``leaf`` is ignored), never
+    ``invalid_log_proof``. Under ``require_inclusion`` that fails closed as
+    :class:`InvalidReceipt`, attributed to the receipt and never to the log.
+    """
+    if receipt_state is not ReceiptState.VERIFIED:
+        if require_inclusion:
+            raise InvalidReceipt(
+                f"verified log inclusion required but {receipt_state.value}: "
+                "inclusion cannot be checked without a verified receipt (RFC-ACDP-0012 §9.1)"
+            )
+        return InclusionVerdict("cannot_verify", receipt_state.value)
+    if leaf is None:
+        raise ValueError("a verified receipt requires the reconstructed leaf (§9.1 step 1)")
+
+    # Steps 2-3.
+    leaf_hash_value = leaf_hash(leaf)
+    verify_checkpoint(
+        log_checkpoint,
+        registry_public_key=registry_public_key,
+        serving_authority=serving_authority,
+        consumer_clock=consumer_clock,
+        skew_allowance_seconds=skew_allowance_seconds,
+    )
+    # Step 4 — binding.
+    if log_inclusion.get("log_id") != log_checkpoint["log_id"]:
+        raise InvalidLogProof("log_inclusion.log_id != log_checkpoint.log_id")
+    tree_size = log_inclusion.get("tree_size")
+    if tree_size != log_checkpoint["tree_size"]:
+        raise InvalidLogProof("log_inclusion.tree_size != log_checkpoint.tree_size")
+    leaf_index = log_inclusion.get("leaf_index")
+    path = log_inclusion.get("inclusion_path")
+    if not isinstance(leaf_index, int) or isinstance(leaf_index, bool):
+        raise InvalidLogProof("log_inclusion.leaf_index must be an integer")
+    if not isinstance(path, list):
+        raise InvalidLogProof("log_inclusion.inclusion_path must be an array")
+    # Steps 5-6 (verify_inclusion also enforces leaf_index < tree_size).
+    verify_inclusion(
+        leaf_hash_value=leaf_hash_value,
+        leaf_index=leaf_index,
+        tree_size=int(log_checkpoint["tree_size"]),
+        inclusion_path=[parse_hash(p) for p in path],
+        root_hash=parse_hash(log_checkpoint["root_hash"]),
+    )
+    return InclusionVerdict("included")
