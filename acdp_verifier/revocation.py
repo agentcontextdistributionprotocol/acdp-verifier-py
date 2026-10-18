@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from .didweb import Authorization
 from .errors import KeyNotAuthorized, SchemaViolation
 from .timeutil import is_canonical_ms, parse_rfc3339
 from .validation import CONTENT_HASH_RE
@@ -14,6 +15,7 @@ from .validation import CONTENT_HASH_RE
 __all__ = [
     "BoundaryVerdict",
     "RevocationStatement",
+    "applies_to",
     "check_not_self_signed",
     "classify_against_boundary",
     "validate_revocation_shape",
@@ -103,10 +105,23 @@ def check_controller_binding(statement: RevocationStatement, body_agent_id: str)
         )
 
 
+def applies_to(statement: RevocationStatement, context_agent_id: str) -> bool:
+    """RFC-ACDP-0014 §7 producer scope *(0.5.0)*.
+
+    A verified revocation changes a context's verdict only when it speaks for
+    that context's producer: its controller (the producer-signed revocation's
+    ``agent_id``, or a registry-attested one's ``revoked_key_controller``)
+    equals the context's ``body.agent_id``. A revocation by any other DID that
+    names the same fingerprint is at most a hint (§13, ``rev-006``).
+    """
+    return statement.controller == context_agent_id
+
+
 def classify_against_boundary(
     statement: RevocationStatement,
     *,
     receipt_attested_created_at: str | None,
+    receipt_key_status: Authorization = Authorization.CURRENT,
 ) -> BoundaryVerdict:
     """RFC-ACDP-0014 §7 boundary semantics for a body signed by the revoked key.
 
@@ -114,8 +129,14 @@ def classify_against_boundary(
     RFC-ACDP-0010 §8 (whose step 5 also confirms the receipt attests the
     revoked fingerprint); pass ``None`` when there is no verified receipt.
     The body's bare ``created_at`` MUST NOT be used here.
+
+    *(0.5.0)* ``receipt_key_status`` is that receipt's key status
+    (:func:`receipts.resolve_receipt_key`). Under the strict profile only a
+    *current* receipt key can place the context; a *historical* one leaves it
+    unplaceable (step 4). ``FAIL_CLOSED_TIME_UNVERIFIABLE`` is the
+    ``unplaceable`` report value.
     """
-    if receipt_attested_created_at is None:
+    if receipt_attested_created_at is None or receipt_key_status is not Authorization.CURRENT:
         return BoundaryVerdict.FAIL_CLOSED_TIME_UNVERIFIABLE
     published = parse_rfc3339(receipt_attested_created_at)
     boundary = parse_rfc3339(statement.compromised_since)

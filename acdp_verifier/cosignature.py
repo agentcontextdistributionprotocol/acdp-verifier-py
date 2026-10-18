@@ -34,6 +34,7 @@ from .errors import (
 )
 from .receipts import receipt_hash, verify_signature_envelope
 from .timeutil import is_canonical_ms, parse_rfc3339
+from .translog import verify_checkpoint
 
 __all__ = [
     "COSIGNATURE_FIELDS",
@@ -358,6 +359,8 @@ def evaluate_quorum(
     cosignatures: Sequence[Mapping[str, Any]],
     *,
     checkpoint: Mapping[str, Any],
+    registry_public_key: bytes | None = None,
+    serving_authority: str | None = None,
     witness_public_keys: Mapping[str, bytes] | None = None,
     did_documents: Mapping[str, Mapping[str, Any]] | None = None,
     trusted_witnesses: Sequence[str] | None = None,
@@ -372,7 +375,21 @@ def evaluate_quorum(
     silently excluded from the count (it does not fail the checkpoint, §8).
     ``witness_public_keys`` optionally supplies a per-``witness_id`` raw key
     (the golden-vector path); otherwise keys resolve from ``did_documents``.
+
+    *(0.5.0)* Precondition: a verified checkpoint. With ``registry_public_key``
+    the full signed checkpoint is first verified per RFC-ACDP-0012 §9.3; a
+    failure raises :class:`InvalidLogProof` (a checkpoint failure, never
+    ``invalid_witness_cosignature``) and no quorum is reported. Without it,
+    the caller MUST already have verified ``checkpoint`` (``wit-005``).
     """
+    if registry_public_key is not None:
+        verify_checkpoint(
+            checkpoint,
+            registry_public_key=registry_public_key,
+            serving_authority=serving_authority,
+            consumer_clock=consumer_clock,
+            skew_allowance_seconds=skew_allowance_seconds,
+        )
     tuple_ = (
         str(checkpoint["log_id"]),
         int(checkpoint["tree_size"]),

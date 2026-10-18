@@ -20,7 +20,8 @@ from acdp_verifier.didkey import (
     MULTICODEC_ED25519,
     did_key_from_ed25519,
 )
-from acdp_verifier.errors import InvalidWitnessCosignature
+from acdp_verifier.errors import InvalidLogProof, InvalidWitnessCosignature
+from acdp_verifier.hashing import sha256_prefixed
 
 WITNESS_A_SEED = bytes.fromhex("33" * 32)
 WITNESS_B_SEED = bytes.fromhex("44" * 32)
@@ -387,3 +388,64 @@ def test_quorum_excludes_wrong_tuple_cosignature() -> None:
         consumer_clock=CLOCK,
     )
     assert quorum.witnessed_count == 0
+
+
+# --- quorum precondition: a verified checkpoint (§8, 0.5.0) -------------------
+
+REGISTRY_SEED = bytes([0x11] * 32)
+REGISTRY_PUB = signing.ed25519_public_key_from_seed(REGISTRY_SEED)
+
+
+def _signed_checkpoint(**overrides: Any) -> dict[str, Any]:
+    unsigned: dict[str, Any] = {
+        "checkpoint_version": "acdp-log/1",
+        **CHECKPOINT,
+        "timestamp": "2026-07-04T12:00:00.000Z",
+    }
+    preimage = sha256_prefixed(jcs.canonicalize_any(unsigned))
+    signed = dict(unsigned)
+    signed["signature"] = {
+        "algorithm": "ed25519",
+        "key_id": "did:web:registry.example.com#log-key-1",
+        "value": base64.b64encode(signing.sign_ed25519(REGISTRY_SEED, preimage)).decode(),
+    }
+    signed.update(overrides)
+    return signed
+
+
+def test_quorum_counts_over_verified_checkpoint() -> None:
+    quorum = cosignature.evaluate_quorum(
+        [_signed(WITNESS_A_SEED, WITNESS_A_ID)],
+        checkpoint=_signed_checkpoint(),
+        registry_public_key=REGISTRY_PUB,
+        witness_public_keys={WITNESS_A_ID: WITNESS_A_PUB},
+        trusted_witnesses=[WITNESS_A_ID],
+        consumer_clock=CLOCK,
+    )
+    assert quorum.witnessed_count == 1
+
+
+def test_quorum_refuses_unverified_checkpoint() -> None:
+    # Altered after signing; a cosignature over the altered tuple still
+    # verifies, so only the checkpoint check stops it (invalid_log_proof).
+    altered = _signed_checkpoint(root_hash="sha256:" + "ab" * 32)
+    unsigned = _unsigned()
+    unsigned["witnessed_checkpoint"] = {
+        k: altered[k] for k in ("log_id", "tree_size", "root_hash", "timestamp")
+    }
+    unsigned["signature"] = {
+        "algorithm": "ed25519",
+        "key_id": f"{WITNESS_A_ID}#witness-key-1",
+        "value": base64.b64encode(
+            signing.sign_ed25519(WITNESS_A_SEED, cosignature.cosignature_hash(unsigned))
+        ).decode(),
+    }
+    with pytest.raises(InvalidLogProof):
+        cosignature.evaluate_quorum(
+            [unsigned],
+            checkpoint=altered,
+            registry_public_key=REGISTRY_PUB,
+            witness_public_keys={WITNESS_A_ID: WITNESS_A_PUB},
+            trusted_witnesses=[WITNESS_A_ID],
+            consumer_clock=CLOCK,
+        )

@@ -14,7 +14,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import jcs
-from .errors import InvalidReceipt, SchemaViolation
+from .didweb import Authorization, resolve_verification_method
+from .errors import AcdpError, InvalidReceipt, SchemaViolation
 from .fingerprint import fingerprint
 from .hashing import sha256_prefixed
 from .signing import (
@@ -33,9 +34,11 @@ from .validation import (
 
 __all__ = [
     "RECEIPT_FIELDS",
+    "ReceiptKey",
     "decode_signature_value",
     "receipt_hash",
     "receipt_preimage",
+    "resolve_receipt_key",
     "verify_receipt",
     "verify_signature_envelope",
 ]
@@ -106,6 +109,46 @@ def verify_signature_envelope(
 class ReceiptVerification:
     receipt_hash: str
     key_fingerprint: str
+
+
+@dataclass(frozen=True)
+class ReceiptKey:
+    """A resolved receipt key and its RFC-ACDP-0010 §8 step 1 status."""
+
+    public_key: bytes
+    status: Authorization  # CURRENT: assertionMethod; HISTORICAL: verificationMethod only
+
+
+def resolve_receipt_key(
+    receipt: Mapping[str, Any],
+    *,
+    registry_did_document: Mapping[str, Any],
+) -> ReceiptKey:
+    """Resolve the receipt's signing key from the registry DID document (§8 step 1).
+
+    *(0.5.0)* The status is ``CURRENT`` when ``assertionMethod`` references the
+    key and ``HISTORICAL`` when it is in ``verificationMethod`` only. A receipt
+    verified under a historical key MUST NOT be presented as a currently
+    authorized attestation; RFC-ACDP-0014 §7 step 1 consumes the status (pass
+    it to :func:`revocation.classify_against_boundary`). Any resolution failure,
+    including a key absent from ``verificationMethod``, is ``invalid_receipt``.
+    """
+    sig = receipt.get("signature")
+    if not isinstance(sig, Mapping):
+        raise InvalidReceipt("receipt has no signature object")
+    key_id = str(sig.get("key_id"))
+    registry_did = str(receipt.get("registry_did"))
+    if key_id.partition("#")[0] != registry_did:
+        raise InvalidReceipt(f"receipt signature.key_id {key_id!r} is not under {registry_did!r}")
+    if registry_did_document.get("id") != registry_did:
+        raise InvalidReceipt(f"DID document id is not the receipt registry_did {registry_did!r}")
+    try:
+        vm = resolve_verification_method(
+            registry_did_document, key_id, str(sig.get("algorithm")), require_assertion=False
+        )
+    except AcdpError as exc:
+        raise InvalidReceipt(f"receipt key resolution failed: {exc}") from exc
+    return ReceiptKey(public_key=vm.public_key, status=vm.authorization)
 
 
 def _validate_receipt_shape(receipt: Mapping[str, Any]) -> None:

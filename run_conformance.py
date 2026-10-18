@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import functools
 import json
 import sys
 from collections import Counter
@@ -27,6 +28,7 @@ from urllib.parse import unquote
 from acdp_verifier import (
     cosignature,
     didkey,
+    didweb,
     hashing,
     headreceipt,
     jcs,
@@ -69,6 +71,17 @@ _SKIP_FAMILIES: dict[str, str] = {
     "err": SKIP_REGISTRY,
     "lc": SKIP_REGISTRY,
 }
+SKIP_DID_FETCH = (
+    "out-of-scope: transport (DID-document fetch/cache/re-fetch; RFC-ACDP-0001 §5.11 "
+    "step 3 and 'Caching'). This verifier takes DID documents as input and never fetches; "
+    "the offline absent-fragment classification is executed in rot-001 C"
+)
+SKIP_DISCOVERY = (
+    "out-of-scope: transport (revocation discovery over search, paging, caching and "
+    "vantages; RFC-ACDP-0014 §8, RFC-ACDP-0005 §2.3). This verifier has no discovery "
+    "client; the §7 boundary and producer-scope rules are executed in rev-002/rev-006/rcpt-005"
+)
+
 _SKIP_IDS: dict[str, str] = {
     "pub-001": SKIP_REGISTRY,
     "pub-003": SKIP_REGISTRY,
@@ -88,6 +101,9 @@ _SKIP_IDS: dict[str, str] = {
     "idem-006": SKIP_REGISTRY,
     "rev-003": SKIP_REGISTRY,
     "rev-004": SKIP_REGISTRY,
+    "did-001": SKIP_DID_FETCH,
+    "rot-002": SKIP_DID_FETCH,
+    "rev-005": SKIP_DISCOVERY,
 }
 
 REGISTRY_AUTHORITY = "registry.example.com"
@@ -275,6 +291,13 @@ def run_can_007(fixture: JsonObj, ctx: SpecContext) -> None:
         )
 
 
+def run_can_013(fixture: JsonObj, ctx: SpecContext) -> None:
+    """Hash the received JSON: a canonical ``.000Z`` must survive verbatim (§5.7)."""
+    run_can_generic(fixture, ctx)
+    conformant, divergent = (v["expected"]["sha256_hex"] for v in fixture["vectors"])
+    check(conformant != divergent, "dropping a .000 fraction must change the hash")
+
+
 def run_can_010(fixture: JsonObj, ctx: SpecContext) -> None:
     run_can_generic(fixture, ctx)
     # DataRef openness: the unknown field must also pass structural validation.
@@ -319,6 +342,59 @@ def run_sig_001(fixture: JsonObj, ctx: SpecContext) -> None:
         check(
             hashing.derive_lineage_id(assigned["ctx_id"]) == assigned["lineage_id"],
             "lineage derivation diverged",
+        )
+
+
+def run_sig_004(fixture: JsonObj, ctx: SpecContext) -> None:
+    """Strict Ed25519 (RFC-ACDP-0001 §5.10): small-order A/R forgeries are rejected."""
+    from cryptography.exceptions import InvalidSignature as CryptoInvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    small_order = {bytes.fromhex(p["encoding_hex"]) for p in fixture["small_order_points"]}
+    check(len(small_order) == 8, "sig-004 must list eight small-order encodings")
+    for vector in fixture["vectors"]:
+        name = vector["name"]
+        expected = vector["expected"]
+        public = bytes.fromhex(vector["public_key_hex"])
+        sig = bytes.fromhex(vector["signature_value_hex"])
+        preimage = vector["signature_input"]
+        check(
+            (public in small_order) == expected["public_key_small_order"],
+            f"{name}: public-key small-order premise",
+        )
+        check((sig[:32] in small_order) == expected["r_small_order"], f"{name}: R premise")
+        # The fixture's premise: the bare (non-strict) equation accepts it, so
+        # rejection below is the strict checks at work, not an unrelated fault.
+        try:
+            Ed25519PublicKey.from_public_bytes(public).verify(sig, preimage.encode("ascii"))
+            loose = True
+        except CryptoInvalidSignature:
+            loose = False
+        check(loose == expected["loose_equation_holds"], f"{name}: loose-equation premise")
+        check(expected["strict_result"] == "reject", f"{name}: unexpected strict_result")
+        expect_code(
+            lambda: signing.verify_ed25519(public, preimage, sig),  # noqa: B023 -- expect_code() calls fn() synchronously before the next iteration rebinds the vector
+            expected["error"],
+            name,
+        )
+    # Every listed encoding is refused as A (valid sig-001 R and s) and as R.
+    sig001 = ctx.fixture("sig-001")
+    golden = sig001["vectors"][0]["expected"]
+    sig001_public = bytes.fromhex(sig001["test_keypair"]["public_key_hex"])
+    sig001_sig = base64.b64decode(golden["signature_value_base64"])
+    content_hash = golden["content_hash"]
+    for point in sorted(small_order):
+        expect_code(
+            functools.partial(signing.verify_ed25519, point, content_hash, sig001_sig),
+            "invalid_signature",
+            f"small-order A {point.hex()}",
+        )
+        expect_code(
+            functools.partial(
+                signing.verify_ed25519, sig001_public, content_hash, point + sig001_sig[32:]
+            ),
+            "invalid_signature",
+            f"small-order R {point.hex()}",
         )
 
 
@@ -1741,6 +1817,297 @@ def run_anc_005(fixture: JsonObj, ctx: SpecContext) -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# 0.5.0 consumer-verdict fixtures (behavioral; executed against the library)
+# ---------------------------------------------------------------------------
+
+
+def _scenario(fixture: JsonObj, letter: str) -> JsonObj:
+    """The expected block of the scenario whose name starts with *letter*."""
+    for scenario in fixture["scenarios"]:
+        if str(scenario["name"]).startswith(f"{letter} "):
+            expected = scenario["expected"]
+            assert isinstance(expected, dict)
+            return expected
+    raise CheckFailure(f"{fixture['id']}: no scenario {letter}")
+
+
+def _sig001_did_document(ctx: SpecContext, *, current: bool) -> tuple[str, JsonObj]:
+    """A DID document for the sig-001 producer key, in or out of assertionMethod."""
+    body = ctx.sig001_retrieval_body()
+    did = str(body["agent_id"])
+    fragment = str(body["signature"]["key_id"]).partition("#")[2]
+    public = bytes.fromhex(ctx.fixture("sig-001")["test_keypair"]["public_key_hex"])
+    doc = make_did_document(did, fragment, public)
+    if not current:
+        doc["assertionMethod"] = []
+    return did, doc
+
+
+def _registry_did_document(ctx: SpecContext, *, current: bool, present: bool = True) -> JsonObj:
+    receipt = ctx.rcpt001_receipt()
+    did = str(receipt["registry_did"])
+    fragment = str(receipt["signature"]["key_id"]).partition("#")[2]
+    doc = make_did_document(did, fragment, ctx.registry_public_key())
+    if not current:
+        doc["assertionMethod"] = []
+    if not present:
+        doc["verificationMethod"] = []
+    return doc
+
+
+def _verify_rcpt001(ctx: SpecContext, receipt: JsonObj, public_key: bytes) -> str:
+    """RFC-ACDP-0010 §8 against the sig-001 body; returns the receipt hash."""
+    body = ctx.sig001_retrieval_body()
+    sig001_public = bytes.fromhex(ctx.fixture("sig-001")["test_keypair"]["public_key_hex"])
+    return receipts.verify_receipt(
+        receipt,
+        registry_public_key=public_key,
+        serving_authority=REGISTRY_AUTHORITY,
+        expected_ctx_id=str(body["ctx_id"]),
+        body=body,
+        recomputed_content_hash=hashing.verify_body_content_hash(body),
+        resolved_producer_key=("ed25519", sig001_public),
+    ).receipt_hash
+
+
+def run_body_003(fixture: JsonObj, ctx: SpecContext) -> None:
+    """origin_registry must equal the ctx_id authority (RFC-ACDP-0004 §2.1)."""
+    inp = fixture["input"]
+
+    def call() -> None:
+        if validation.ctx_id_authority(str(inp["ctx_id"])) != inp["origin_registry"]:
+            raise SchemaViolation("origin_registry != ctx_id authority")
+
+    expect_code(call, fixture["expected"]["error_code"], fixture["id"])
+
+
+def run_rev_006(fixture: JsonObj, ctx: SpecContext) -> None:
+    """Producer scope of the RFC-ACDP-0014 §7 trigger."""
+    producer_b = str(fixture["input"]["producer_B"])
+    attacker_a = str(fixture["input"]["attacker_A"])
+    template = ctx.fixture("rev-001")["vectors"][0]["expected"]["publish_request_body"]
+
+    def statement_by(agent_id: str) -> revocation.RevocationStatement:
+        body = json.loads(json.dumps(template))
+        body["agent_id"] = agent_id
+        return revocation.validate_revocation_shape(body)
+
+    # A — the same §5-valid statement, published by DID A, does not apply.
+    check(_scenario(fixture, "A")["outcome"] == "success", "rev-006 A premise")
+    check(not revocation.applies_to(statement_by(attacker_a), producer_b), "A: must not apply")
+    # B — published by B, it applies; a post-T context fails closed.
+    expected_b = _scenario(fixture, "B")
+    check(expected_b["key_revocation"] == "revoked", "rev-006 B premise")
+    statement = statement_by(producer_b)
+    check(revocation.applies_to(statement, producer_b), "B: must apply")
+    post_t = "2026-05-02T00:00:00.000Z"
+    verdict = revocation.classify_against_boundary(statement, receipt_attested_created_at=post_t)
+    check(verdict is revocation.BoundaryVerdict.FAIL_CLOSED_IN_WINDOW, f"B verdict: {verdict}")
+
+
+def run_rcpt_005(fixture: JsonObj, ctx: SpecContext) -> None:
+    """Receipt-key status (RFC-ACDP-0010 §8 step 1) and RFC-ACDP-0014 §7 step 1."""
+    receipt = ctx.rcpt001_receipt()
+    for letter, current in (("A", True), ("B", False)):
+        key = receipts.resolve_receipt_key(
+            receipt, registry_did_document=_registry_did_document(ctx, current=current)
+        )
+        want = _scenario(fixture, letter)["receipt_key_status"]
+        check(key.status.value == want, f"{letter}: status {key.status.value} != {want}")
+        _verify_rcpt001(ctx, receipt, key.public_key)
+    expect_code(
+        lambda: receipts.resolve_receipt_key(
+            receipt,
+            registry_did_document=_registry_did_document(ctx, current=False, present=False),
+        ),
+        _scenario(fixture, "C")["error_code"],
+        "C: receipt key absent",
+    )
+    # D — K1 (the sig-001 key) revoked from T = 2026-05-01; the receipt places
+    # the context pre-T, but only a current receipt key may place it.
+    check(_scenario(fixture, "D")["key_revocation"] == "unplaceable", "D premise")
+    statement = revocation.validate_revocation_shape(
+        ctx.fixture("rev-001")["vectors"][0]["expected"]["publish_request_body"]
+    )
+    check(
+        statement.revoked_key_fingerprint == receipt["key_fingerprint"],
+        "D: the revocation must name the receipt-attested key",
+    )
+    verdicts = revocation.BoundaryVerdict
+    for status, want_verdict in (
+        (didweb.Authorization.HISTORICAL, verdicts.FAIL_CLOSED_TIME_UNVERIFIABLE),
+        (didweb.Authorization.CURRENT, verdicts.HISTORICALLY_AUTHORIZED_PRE_COMPROMISE),
+    ):
+        got = revocation.classify_against_boundary(
+            statement,
+            receipt_attested_created_at=str(receipt["created_at"]),
+            receipt_key_status=status,
+        )
+        check(got is want_verdict, f"D ({status.value} receipt key): {got}")
+
+
+def run_rcpt_006(fixture: JsonObj, ctx: SpecContext) -> None:
+    """Receipt verdict reported separately; a failing receipt counts as absent."""
+    body = ctx.sig001_retrieval_body()
+    recomputed = hashing.verify_body_content_hash(body)
+    # The rcpt-001 receipt with ctx_id altered, re-signed so that exactly the
+    # §8 step 3 context binding is what fails.
+    altered = {k: v for k, v in ctx.rcpt001_receipt().items() if k != "signature"}
+    altered["ctx_id"] = "acdp://registry.example.com/99999999-9999-4999-8999-999999999999"
+    altered["signature"] = dict(ctx.rcpt001_receipt()["signature"])
+    altered["signature"]["value"] = base64.b64encode(
+        signing.sign_ed25519(ctx.registry_seed(), receipts.receipt_hash(altered))
+    ).decode()
+
+    for letter, current in (("A", True), ("B", False)):
+        expected = _scenario(fixture, letter)
+        try:
+            _verify_rcpt001(ctx, altered, ctx.registry_public_key())
+            receipt_verdict = "valid"
+        except AcdpError as exc:
+            receipt_verdict = exc.code
+        check(receipt_verdict == expected["receipt_verdict"], f"{letter}: receipt verdict")
+        did, doc = _sig001_did_document(ctx, current=current)
+        # The body verdict stands on its own: signature and content_hash hold.
+        verify.verify_producer_signature(
+            body, recomputed, did_documents={did: doc}, allow_historical=True
+        )
+        check(expected["body_verdict"] == "valid", f"{letter}: body verdict premise")
+        # The failing receipt is treated as absent: the §10 historical-key
+        # rule (which needs a verified receipt) is unavailable.
+        try:
+            verify.verify_producer_signature(
+                body, recomputed, did_documents={did: doc}, allow_historical=False
+            )
+            outcome = "success"
+        except AcdpError:
+            outcome = "failure"
+        check(outcome == expected["outcome"], f"{letter}: outcome {outcome}")
+
+
+def _log001(ctx: SpecContext) -> tuple[JsonObj, JsonObj, JsonObj]:
+    """The log-001 checkpoint, inclusion proof and (echoed) leaf 0."""
+    vector = ctx.fixture("log-001")["vectors"][0]
+    return (
+        vector["expected"]["log_checkpoint"],
+        vector["expected"]["log_inclusion"],
+        vector["leaves"][0],
+    )
+
+
+def _inclusion(
+    ctx: SpecContext, leaf: JsonObj | None, state: translog.ReceiptState, **kw: Any
+) -> translog.InclusionVerdict:
+    checkpoint, inclusion, _ = _log001(ctx)
+    return translog.verify_log_inclusion(
+        inclusion,
+        log_checkpoint=checkpoint,
+        registry_public_key=ctx.registry_public_key(),
+        leaf=leaf,
+        receipt_state=state,
+        serving_authority=REGISTRY_AUTHORITY,
+        consumer_clock=parse_rfc3339(str(checkpoint["timestamp"])),
+        **kw,
+    )
+
+
+def run_log_005(fixture: JsonObj, ctx: SpecContext) -> None:
+    """Inclusion needs a verified receipt (RFC-ACDP-0012 §9.1, 0.5.0)."""
+    _, _, echoed = _log001(ctx)
+    body = ctx.sig001_retrieval_body()
+    sig001_public = bytes.fromhex(ctx.fixture("sig-001")["test_keypair"]["public_key_hex"])
+
+    # Control: with the receipt verified, the leaf reconstructed from verified
+    # material proves inclusion.
+    verified_leaf = {
+        "leaf_version": translog.LEAF_VERSION,
+        **{k: body[k] for k in ("ctx_id", "lineage_id", "origin_registry", "created_at")},
+        "content_hash": hashing.verify_body_content_hash(body),
+        "key_fingerprint": fingerprint_ed25519(sig001_public),
+        "receipt_hash": _verify_rcpt001(ctx, ctx.rcpt001_receipt(), ctx.registry_public_key()),
+    }
+    got = _inclusion(ctx, verified_leaf, translog.ReceiptState.VERIFIED)
+    check(got.log_inclusion == "included", "control: verified receipt must yield included")
+
+    def want(letter: str, verdict: translog.InclusionVerdict) -> None:
+        expected = _scenario(fixture, letter)
+        check(
+            (verdict.log_inclusion, verdict.reason)
+            == (expected["log_inclusion"], expected["log_inclusion_reason"]),
+            f"{letter}: {verdict}",
+        )
+
+    # A — no receipt.
+    want("A", _inclusion(ctx, None, translog.ReceiptState.ABSENT))
+    # B — rcpt-002's tampered receipt fails §8: its own verdict, then cannot_verify.
+    tampered = ctx.fixture("rcpt-002")["input"]["registry_receipt"]
+    expect_code(
+        lambda: _verify_rcpt001(ctx, tampered, ctx.registry_public_key()),
+        _scenario(fixture, "B")["receipt_verdict"],
+        "B: tampered receipt",
+    )
+    want("B", _inclusion(ctx, None, translog.ReceiptState.INVALID))
+    # C — the echoed leaf is the true leaf, yet it is never trusted.
+    check(echoed == verified_leaf, "C premise: the echo equals the true leaf")
+    want("C", _inclusion(ctx, echoed, translog.ReceiptState.ABSENT))
+    # D — require-inclusion fails closed, attributed to the receipt.
+    expect_code(
+        lambda: _inclusion(ctx, None, translog.ReceiptState.ABSENT, require_inclusion=True),
+        _scenario(fixture, "D")["error_code"],
+        "D: require-inclusion policy",
+    )
+
+
+def run_wit_005(fixture: JsonObj, ctx: SpecContext) -> None:
+    """A quorum counts only over a verified checkpoint (RFC-ACDP-0015 §8, 0.5.0)."""
+    wit001 = ctx.fixture("wit-001")
+    seed = bytes.fromhex(wit001["witness_test_keypair"]["private_seed_hex"])
+    public = bytes.fromhex(wit001["witness_test_keypair"]["public_key_hex"])
+    unsigned = wit001["vectors"][0]["cosignature_unsigned"]
+    witness_id = str(unsigned["witness_id"])
+    clock = parse_rfc3339(str(unsigned["witnessed_at"]))
+    quorum_size = int(fixture["input"]["quorum"])
+    checkpoint, _, _ = _log001(ctx)
+
+    def quorum(cp: JsonObj, cosig: JsonObj, **kw: Any) -> cosignature.QuorumResult:
+        return cosignature.evaluate_quorum(
+            [cosig],
+            checkpoint=cp,
+            witness_public_keys={witness_id: public},
+            trusted_witnesses=[witness_id],
+            consumer_clock=clock,
+            **kw,
+        )
+
+    # A — log-004's altered checkpoint; a cosignature over the altered triple.
+    altered = ctx.fixture("log-004")["input"]["log_checkpoint"]
+    over_altered = json.loads(json.dumps(unsigned))
+    over_altered["witnessed_checkpoint"]["root_hash"] = altered["root_hash"]
+    cosig_altered = _sign_cosignature(over_altered, seed, witness_id)
+    check(
+        quorum(altered, cosig_altered).witnessed_count == quorum_size,
+        "A premise: the cosignature over the altered triple verifies on its own",
+    )
+    expected_a = _scenario(fixture, "A")
+    expect_code(
+        lambda: quorum(altered, cosig_altered, registry_public_key=ctx.registry_public_key()),
+        expected_a["error_code"],
+        "A: altered checkpoint",
+    )
+    # B — verified checkpoint, no receipt: N-witnessed, inclusion cannot_verify.
+    expected_b = _scenario(fixture, "B")
+    got = quorum(
+        checkpoint,
+        _sign_cosignature(unsigned, seed, witness_id),
+        registry_public_key=ctx.registry_public_key(),
+        serving_authority=REGISTRY_AUTHORITY,
+    )
+    check(got.witnessed_count == expected_b["witnessed"], f"B: witnessed {got.witnessed_count}")
+    inclusion = _inclusion(ctx, None, translog.ReceiptState.ABSENT)
+    check(inclusion.log_inclusion == expected_b["log_inclusion"], f"B: {inclusion}")
+
+
 def verify_golden_context(ctx: SpecContext) -> None:
     path = ctx.spec_dir / "examples" / "retrieval" / "golden-context.json"
     envelope = json.loads(path.read_text(encoding="utf-8"))
@@ -1799,10 +2166,12 @@ _EXECUTORS: dict[str, Executor] = {
     "can-010": run_can_010,
     "can-011": run_can_generic,
     "can-012": run_can_generic,
+    "can-013": run_can_013,
     "lin-001": run_can_generic,
     "sig-001": run_sig_001,
     "sig-002": run_sig_002,
     "sig-003": run_sig_003,
+    "sig-004": run_sig_004,
     "fp-001": run_fp_001,
     "dk-001": run_dk_001,
     "dk-002": run_dk_002,
@@ -1832,6 +2201,12 @@ _EXECUTORS: dict[str, Executor] = {
     "anc-003": run_anc_003,
     "anc-004": run_can_generic,
     "anc-005": run_anc_005,
+    "body-003": run_body_003,
+    "log-005": run_log_005,
+    "rcpt-005": run_rcpt_005,
+    "rcpt-006": run_rcpt_006,
+    "rev-006": run_rev_006,
+    "wit-005": run_wit_005,
     "caps-001": run_caps_simple,
     "caps-002": run_caps_simple,
     "caps-003": run_caps_simple,
