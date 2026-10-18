@@ -36,6 +36,27 @@ SUPPORTED_ALGORITHMS: frozenset[str] = frozenset({"ed25519", "ecdsa-p256"})
 
 _P256_COORD_LEN = 32
 
+# Strict Ed25519 (RFC-ACDP-0001 §5.10, RFC 8032 §5.1.7). OpenSSL's verify
+# checks only the cofactorless equation [s]B = R + [k]A, which an identity A
+# and R with s = 0 satisfy for every message (sig-004), so the small-order
+# and range checks are done here before the library call.
+_ED25519_P = 2**255 - 19
+_ED25519_L = 2**252 + 27742317777372353535851937790883648493
+# The eight points of order dividing 8, as listed in sig-004.
+_ED25519_SMALL_ORDER: frozenset[bytes] = frozenset(
+    bytes.fromhex(h)
+    for h in (
+        "0100000000000000000000000000000000000000000000000000000000000000",
+        "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000080",
+        "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+        "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+        "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+        "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+    )
+)
+
 
 def sign_ed25519(seed: bytes, preimage: str) -> bytes:
     """Sign the ASCII bytes of *preimage* with an Ed25519 key from a 32-byte seed."""
@@ -53,12 +74,33 @@ def ed25519_public_key_from_seed(seed: bytes) -> bytes:
     return key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
 
 
+def _check_ed25519_point(encoding: bytes, what: str) -> None:
+    """Reject a non-canonical or small-order point encoding (§5.10 (b))."""
+    y = int.from_bytes(encoding, "little") & ((1 << 255) - 1)
+    x_sign = encoding[31] >> 7
+    # y >= p, or x = 0 (y = ±1) with the sign bit set, is a non-canonical
+    # encoding; rejecting it (a MAY in §5.10) also closes every alias of
+    # the small-order points below.
+    if y >= _ED25519_P or (x_sign and y in (1, _ED25519_P - 1)):
+        raise InvalidSignature(f"Ed25519 {what} is a non-canonical point encoding")
+    if encoding in _ED25519_SMALL_ORDER:
+        raise InvalidSignature(f"Ed25519 {what} is a small-order point")
+
+
 def verify_ed25519(public_key: bytes, preimage: str, signature: bytes) -> None:
-    """Verify an Ed25519 signature over the ASCII bytes of *preimage*."""
+    """Strictly verify an Ed25519 signature over the ASCII bytes of *preimage*.
+
+    Applies RFC-ACDP-0001 §5.10: rejects ``s >= L`` and a small-order (or
+    non-canonically encoded) public key ``A`` or nonce point ``R``.
+    """
     if len(public_key) != 32:
         raise InvalidSignature("Ed25519 public key must be exactly 32 bytes")
     if len(signature) != 64:
         raise InvalidSignature(f"Ed25519 signature must be 64 bytes, got {len(signature)}")
+    if int.from_bytes(signature[32:], "little") >= _ED25519_L:
+        raise InvalidSignature("Ed25519 signature scalar s >= L")
+    _check_ed25519_point(public_key, "public key A")
+    _check_ed25519_point(signature[:32], "nonce point R")
     try:
         Ed25519PublicKey.from_public_bytes(public_key).verify(signature, preimage.encode("ascii"))
     except _CryptoInvalidSignature as exc:
