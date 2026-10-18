@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import functools
 import json
 import sys
 from collections import Counter
@@ -275,6 +276,13 @@ def run_can_007(fixture: JsonObj, ctx: SpecContext) -> None:
         )
 
 
+def run_can_013(fixture: JsonObj, ctx: SpecContext) -> None:
+    """Hash the received JSON: a canonical ``.000Z`` must survive verbatim (§5.7)."""
+    run_can_generic(fixture, ctx)
+    conformant, divergent = (v["expected"]["sha256_hex"] for v in fixture["vectors"])
+    check(conformant != divergent, "dropping a .000 fraction must change the hash")
+
+
 def run_can_010(fixture: JsonObj, ctx: SpecContext) -> None:
     run_can_generic(fixture, ctx)
     # DataRef openness: the unknown field must also pass structural validation.
@@ -319,6 +327,59 @@ def run_sig_001(fixture: JsonObj, ctx: SpecContext) -> None:
         check(
             hashing.derive_lineage_id(assigned["ctx_id"]) == assigned["lineage_id"],
             "lineage derivation diverged",
+        )
+
+
+def run_sig_004(fixture: JsonObj, ctx: SpecContext) -> None:
+    """Strict Ed25519 (RFC-ACDP-0001 §5.10): small-order A/R forgeries are rejected."""
+    from cryptography.exceptions import InvalidSignature as CryptoInvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    small_order = {bytes.fromhex(p["encoding_hex"]) for p in fixture["small_order_points"]}
+    check(len(small_order) == 8, "sig-004 must list eight small-order encodings")
+    for vector in fixture["vectors"]:
+        name = vector["name"]
+        expected = vector["expected"]
+        public = bytes.fromhex(vector["public_key_hex"])
+        sig = bytes.fromhex(vector["signature_value_hex"])
+        preimage = vector["signature_input"]
+        check(
+            (public in small_order) == expected["public_key_small_order"],
+            f"{name}: public-key small-order premise",
+        )
+        check((sig[:32] in small_order) == expected["r_small_order"], f"{name}: R premise")
+        # The fixture's premise: the bare (non-strict) equation accepts it, so
+        # rejection below is the strict checks at work, not an unrelated fault.
+        try:
+            Ed25519PublicKey.from_public_bytes(public).verify(sig, preimage.encode("ascii"))
+            loose = True
+        except CryptoInvalidSignature:
+            loose = False
+        check(loose == expected["loose_equation_holds"], f"{name}: loose-equation premise")
+        check(expected["strict_result"] == "reject", f"{name}: unexpected strict_result")
+        expect_code(
+            lambda: signing.verify_ed25519(public, preimage, sig),  # noqa: B023 -- expect_code() calls fn() synchronously before the next iteration rebinds the vector
+            expected["error"],
+            name,
+        )
+    # Every listed encoding is refused as A (valid sig-001 R and s) and as R.
+    sig001 = ctx.fixture("sig-001")
+    golden = sig001["vectors"][0]["expected"]
+    sig001_public = bytes.fromhex(sig001["test_keypair"]["public_key_hex"])
+    sig001_sig = base64.b64decode(golden["signature_value_base64"])
+    content_hash = golden["content_hash"]
+    for point in sorted(small_order):
+        expect_code(
+            functools.partial(signing.verify_ed25519, point, content_hash, sig001_sig),
+            "invalid_signature",
+            f"small-order A {point.hex()}",
+        )
+        expect_code(
+            functools.partial(
+                signing.verify_ed25519, sig001_public, content_hash, point + sig001_sig[32:]
+            ),
+            "invalid_signature",
+            f"small-order R {point.hex()}",
         )
 
 
@@ -1799,10 +1860,12 @@ _EXECUTORS: dict[str, Executor] = {
     "can-010": run_can_010,
     "can-011": run_can_generic,
     "can-012": run_can_generic,
+    "can-013": run_can_013,
     "lin-001": run_can_generic,
     "sig-001": run_sig_001,
     "sig-002": run_sig_002,
     "sig-003": run_sig_003,
+    "sig-004": run_sig_004,
     "fp-001": run_fp_001,
     "dk-001": run_dk_001,
     "dk-002": run_dk_002,
