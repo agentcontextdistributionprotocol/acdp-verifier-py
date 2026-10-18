@@ -23,6 +23,26 @@ SIG001_SIGNATURE_B64 = (
     "ErkbV+FUdn49TgF3zJ3RBe3AmyGxLVAQdMjlhabUfM96qendmWwdVodX/SV3O3aKLypbUu6gmb5Npt3O/w7nDQ=="
 )
 
+# RFC-ACDP-0001 §5.10 / sig-004: the eight small-order Ed25519 encodings.
+SMALL_ORDER_POINTS = [
+    "0100000000000000000000000000000000000000000000000000000000000000",
+    "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0000000000000000000000000000000000000000000000000000000000000080",
+    "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+    "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+    "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+    "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+]
+# Non-canonical encodings of the identity: x = 0 with the sign bit set, and
+# y = 1 + p. A loose verifier decodes both as the identity point.
+NON_CANONICAL_IDENTITY = [
+    "0100000000000000000000000000000000000000000000000000000000000080",
+    "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+]
+IDENTITY = bytes.fromhex(SMALL_ORDER_POINTS[0])
+ED25519_L = 2**252 + 27742317777372353535851937790883648493
+
 P256_X = bytes.fromhex("6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296")
 P256_Y = bytes.fromhex("4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5")
 SIG002_SIGNATURE_B64 = (
@@ -52,6 +72,43 @@ class TestEd25519:
 
     def test_public_key_from_seed(self) -> None:
         assert signing.ed25519_public_key_from_seed(SIG001_SEED) == SIG001_PUBLIC
+
+
+class TestEd25519Strict:
+    """RFC-ACDP-0001 §5.10: strict verification (RFC 8032 §5.1.7)."""
+
+    @pytest.mark.parametrize("preimage", [SIG001_HASH, "sha256:" + "ab" * 32, "anything"])
+    def test_sig_004_identity_forgery_rejected_for_any_message(self, preimage: str) -> None:
+        # A = identity, R = identity, s = 0 satisfies [s]B = R + [k]A for every k.
+        with pytest.raises(InvalidSignature):
+            signing.verify_ed25519(IDENTITY, preimage, IDENTITY + bytes(32))
+
+    @pytest.mark.parametrize("encoding", NON_CANONICAL_IDENTITY)
+    def test_non_canonical_identity_forgery_rejected(self, encoding: str) -> None:
+        point = bytes.fromhex(encoding)
+        with pytest.raises(InvalidSignature):
+            signing.verify_ed25519(point, SIG001_HASH, point + bytes(32))
+
+    @pytest.mark.parametrize("encoding", SMALL_ORDER_POINTS)
+    def test_small_order_public_key_rejected(self, encoding: str) -> None:
+        sig = base64.b64decode(SIG001_SIGNATURE_B64)
+        with pytest.raises(InvalidSignature, match="small-order"):
+            signing.verify_ed25519(bytes.fromhex(encoding), SIG001_HASH, sig)
+
+    @pytest.mark.parametrize("encoding", SMALL_ORDER_POINTS)
+    def test_small_order_r_rejected(self, encoding: str) -> None:
+        sig = base64.b64decode(SIG001_SIGNATURE_B64)
+        with pytest.raises(InvalidSignature, match="small-order"):
+            signing.verify_ed25519(SIG001_PUBLIC, SIG001_HASH, bytes.fromhex(encoding) + sig[32:])
+
+    def test_non_reduced_s_rejected(self) -> None:
+        sig = base64.b64decode(SIG001_SIGNATURE_B64)
+        s = int.from_bytes(sig[32:], "little") + ED25519_L
+        with pytest.raises(InvalidSignature, match="s >= L"):
+            signing.verify_ed25519(SIG001_PUBLIC, SIG001_HASH, sig[:32] + s.to_bytes(32, "little"))
+
+    def test_valid_signature_still_verifies(self) -> None:
+        signing.verify_ed25519(SIG001_PUBLIC, SIG001_HASH, base64.b64decode(SIG001_SIGNATURE_B64))
 
 
 class TestEcdsaP256:
