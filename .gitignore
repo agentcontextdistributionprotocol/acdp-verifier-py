@@ -23,3 +23,6 @@ DECISIONS.md
 
 # macOS Finder metadata.
 .DS_Store
+
+# uv lockfile — this repo is not managed with uv.
+uv.lock
