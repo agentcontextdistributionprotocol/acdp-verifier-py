@@ -79,6 +79,8 @@ ignore = ["E501", "W191", "RUF002", "RUF003"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Tests import the repo-root run_conformance module.
+pythonpath = ["."]
 
 [tool.coverage.run]
 source = ["acdp_verifier"]

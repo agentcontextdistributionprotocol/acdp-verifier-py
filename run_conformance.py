@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import base64
 import functools
+import hashlib
 import json
 import sys
 from collections import Counter
@@ -34,6 +35,7 @@ from acdp_verifier import (
     jcs,
     receipts,
     revocation,
+    seamdecision,
     signing,
     translog,
     validation,
@@ -1783,16 +1785,23 @@ def run_anc_005(fixture: JsonObj, ctx: SpecContext) -> None:
     it verifies end-to-end is therefore a direct, non-vacuous check of
     RFC-ACDP-0016 §6's "MUST ignore for resolution, MUST still verify".
     """
+    anchor = {
+        "scheme": "a-scheme.this-verifier.does-not-recognize",
+        "content_hash": "sha256:" + "11" * 32,
+    }
+    expect_accept(lambda: validation.validate_anchor(anchor), "anc-005 anchor shape")
+    _verify_body_with_anchors(ctx, [anchor], "anc-005")
+
+
+def _signed_body_with_anchors(ctx: SpecContext, anchors: list[JsonObj]) -> tuple[JsonObj, JsonObj]:
+    """The golden context carrying *anchors*, re-hashed and re-signed with the sig-001 key.
+
+    Returns the body and the DID documents that resolve its producer key.
+    """
     path = ctx.spec_dir / "examples" / "retrieval" / "golden-context.json"
     envelope = json.loads(path.read_text(encoding="utf-8"))
     body = dict(envelope["body"])
-    body["anchors"] = [
-        {
-            "scheme": "a-scheme.this-verifier.does-not-recognize",
-            "content_hash": "sha256:" + "11" * 32,
-        }
-    ]
-    expect_accept(lambda: validation.validate_anchor(body["anchors"][0]), "anc-005 anchor shape")
+    body["anchors"] = anchors
 
     sig001 = ctx.fixture("sig-001")
     seed = bytes.fromhex(sig001["test_keypair"]["private_seed_hex"])
@@ -1807,9 +1816,130 @@ def run_anc_005(fixture: JsonObj, ctx: SpecContext) -> None:
 
     agent_id = str(body["agent_id"])
     documents = {agent_id: make_did_document(agent_id, "key-1", producer_public)}
+    return body, documents
+
+
+def _verify_body_with_anchors(ctx: SpecContext, anchors: list[JsonObj], what: str) -> None:
+    """A signed body carrying *anchors* verifies end to end with a current key."""
+    body, documents = _signed_body_with_anchors(ctx, anchors)
     result = verify.verify_context_body(body, did_documents=documents)
-    check(result.content_hash == body["content_hash"], "anc-005 recomputed hash mismatch")
-    check(not result.historically_authorized, "anc-005 key must be current, not historical")
+    check(result.content_hash == body["content_hash"], f"{what} recomputed hash mismatch")
+    check(not result.historically_authorized, f"{what} key must be current, not historical")
+
+
+# anc-006: the scenario outcome vocabulary is a fixed function of the anchor verdict.
+_ANC006_OUTCOMES = {
+    seamdecision.MATCH: "success",
+    seamdecision.MISMATCH: "anchor_invalid",
+    seamdecision.CANNOT_VERIFY: "anchor_cannot_verify",
+}
+_ANC006_RECORD_C = "scenario A's inputs"
+_ANC006_RECORD_D = "scenario A's inputs with schema_version = 3"
+
+
+def _anc006_scenario(fixture: JsonObj, letter: str) -> JsonObj:
+    """The whole scenario whose name starts with *letter* (C and D need ``input``)."""
+    matches = [s for s in fixture["scenarios"] if str(s["name"]).startswith(f"{letter} ")]
+    check(len(matches) == 1, f"anc-006: expected exactly one scenario {letter}, got {len(matches)}")
+    scenario = matches[0]
+    assert isinstance(scenario, dict)
+    return scenario
+
+
+def _check_anc006_verdict(letter: str, scenario: JsonObj, anchor: JsonObj, inputs: JsonObj) -> None:
+    expected = scenario["expected"]
+    verdict = seamdecision.verify_anchor(anchor, inputs)
+    check(
+        verdict.anchor_verdict == expected["anchor_verdict"],
+        f"anc-006 {letter}: anchor verdict {verdict.anchor_verdict!r} "
+        f"(reason {verdict.reason!r}), expected {expected['anchor_verdict']!r}",
+    )
+    check(
+        _ANC006_OUTCOMES[verdict.anchor_verdict] == expected["outcome"],
+        f"anc-006 {letter}: outcome {_ANC006_OUTCOMES[verdict.anchor_verdict]!r}, "
+        f"expected {expected['outcome']!r}",
+    )
+    # RFC-ACDP-0016 §6: the anchor verdict never changes the body's own verdict.
+    check(
+        expected["body_verification_verdict"] == "valid",
+        f"anc-006 {letter}: body_verification_verdict "
+        f"{expected['body_verification_verdict']!r} contradicts §6 independence",
+    )
+
+
+def _check_anc006_vectors(fixture: JsonObj) -> dict[str, JsonObj]:
+    """Every anc-006 anchor-level check; returns each scenario's anchor for the body leg.
+
+    Pure: needs no spec checkout, so the checks themselves are unit-testable.
+    """
+    anchors: dict[str, JsonObj] = {}
+    digests: dict[str, str] = {}
+    for letter in ("A", "B"):
+        scenario = _anc006_scenario(fixture, letter)
+        vector = scenario["vector"]
+        inputs, anchor = vector["inputs"], vector["anchor"]
+        digest_hex = str(vector["digest_hex"])
+        preimage = bytes.fromhex(vector["preimage_hex"])
+        check(
+            hashlib.sha256(preimage).hexdigest() == digest_hex,
+            f"anc-006 {letter}: fixture preimage_hex does not hash to digest_hex",
+        )
+        check(
+            anchor["content_hash"] == "sha256:" + digest_hex,
+            f"anc-006 {letter}: anchor content_hash is not the vector digest",
+        )
+        try:
+            record = seamdecision.parse_disclosed_record(inputs)
+        except seamdecision.DisclosureError as exc:
+            raise CheckFailure(f"anc-006 {letter}: vector inputs refused: {exc}") from exc
+        check(
+            seamdecision.preimage_v4(record) == preimage,
+            f"anc-006 {letter}: recomputed preimage differs from preimage_hex",
+        )
+        _check_anc006_verdict(letter, scenario, anchor, inputs)
+        anchors[letter] = anchor
+        digests[letter] = digest_hex
+    inputs_a = _anc006_scenario(fixture, "A")["vector"]["inputs"]
+
+    # C: A's record against B's digest -- a real, different record digest.
+    scenario = _anc006_scenario(fixture, "C")
+    check(
+        scenario["input"]["record"] == _ANC006_RECORD_C,
+        f"anc-006 C: record is {scenario['input']['record']!r}, expected {_ANC006_RECORD_C!r}",
+    )
+    anchor = scenario["input"]["anchor"]
+    check(
+        anchor["content_hash"] == "sha256:" + digests["B"],
+        "anc-006 C: anchor does not name scenario B's digest",
+    )
+    _check_anc006_verdict("C", scenario, anchor, inputs_a)
+    anchors["C"] = anchor
+
+    # D: A's record as schema_version 3 against A's own v4 digest. A v4 fallback
+    # would report "match", so cannot_verify here is a non-vacuous check.
+    scenario = _anc006_scenario(fixture, "D")
+    check(
+        scenario["input"]["record"] == _ANC006_RECORD_D,
+        f"anc-006 D: record is {scenario['input']['record']!r}, expected {_ANC006_RECORD_D!r}",
+    )
+    anchor = scenario["input"]["anchor"]
+    check(
+        anchor["content_hash"] == "sha256:" + digests["A"],
+        "anc-006 D: anchor does not name scenario A's digest",
+    )
+    _check_anc006_verdict("D", scenario, anchor, {**inputs_a, "schema_version": 3})
+    anchors["D"] = anchor
+    return anchors
+
+
+def run_anc_006(fixture: JsonObj, ctx: SpecContext) -> None:
+    """The seam.decision scheme-aware hook (RFC-ACDP-0016 §6) against Seam's vectors.
+
+    Each scenario's anchor verdict is checked by ``_check_anc006_vectors``; then a
+    signed body carrying that anchor must still verify, whatever the anchor verdict.
+    """
+    for letter, anchor in _check_anc006_vectors(fixture).items():
+        _verify_body_with_anchors(ctx, [anchor], f"anc-006 {letter}")
 
 
 # ---------------------------------------------------------------------------
@@ -2201,6 +2331,7 @@ _EXECUTORS: dict[str, Executor] = {
     "anc-003": run_anc_003,
     "anc-004": run_can_generic,
     "anc-005": run_anc_005,
+    "anc-006": run_anc_006,
     "body-003": run_body_003,
     "log-005": run_log_005,
     "rcpt-005": run_rcpt_005,
