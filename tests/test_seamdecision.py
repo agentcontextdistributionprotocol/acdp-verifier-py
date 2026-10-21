@@ -140,6 +140,52 @@ class TestRecordDigestV4:
         assert seamdecision.record_digest_v4(record).hex() == DIGEST_A
 
 
+# Seam spec seam-event.v1.md §Record digest "Worked vector" (seam-api-v0.48.0). Its
+# trust_basis_commitment is a short opaque string, not a full key-id/HMAC rendering.
+SPEC_WORKED_INPUTS: dict[str, Any] = {
+    "decision_id": "d1",
+    "tenant": "acme",
+    "namespace": "ns",
+    "ciphertext_hex": b"cipher".hex(),
+    "ciphertext_digest_hex": hashlib.sha256(b"cipher").hexdigest(),
+    "sealed_at": 7,
+    "outcome": "Resolved",
+    "mode": None,
+    "policy_version": None,
+    "supersedes": None,
+    "context_digest_hex": "8e87a93fd65b0d756817d2dbe3d9346542a2ad8272cc525f2df23d4b73802f85",
+    "participation_digest_hex": "521bb2054af761c4b2374702c8e5a2963416b3b48d4058fb22bc84c3efb49d85",
+    "policy_rules_digest_hex": None,
+    "classification": "Internal",
+    "participants": ["p1", "p2"],
+    "participants_digest_hex": "daffd522fc0760d9bb38e2bfb949d6eeb958f45efcfb212f7f3870df1105e06d",
+    "trust_basis_commitment": "hmac-sha256:k1:00",
+    "auth_method": "aitp-tct",
+    "schema_version": 4,
+}
+
+
+class TestSpecWorkedVector:
+    @pytest.mark.parametrize(
+        ("policy_rules", "digest"),
+        [
+            (None, "2c4fd0f7223dd53215c40f763e540786cbb9d1a9b3dd4646836c73f9ad7813c3"),
+            ("ab" * 32, "799e05b2b690b4a1bfb5ff57868aa69e62f518101d926181e5ec53f5b429dcdf"),
+        ],
+    )
+    def test_digest_v4(self, policy_rules: str | None, digest: str) -> None:
+        inputs = {**SPEC_WORKED_INPUTS, "policy_rules_digest_hex": policy_rules}
+        record = seamdecision.parse_disclosed_record(inputs)
+        assert seamdecision.record_digest_v4(record).hex() == digest
+        assert seamdecision.verify_anchor(anchor(digest), inputs) == AnchorVerdict(MATCH)
+
+    def test_participants_digest_empty(self) -> None:
+        assert (
+            seamdecision.participants_digest([]).hex()
+            == "88693ab24c8d56e6a92f63cf57d094ae463264cf5c74b7ba31dbc905ea164997"
+        )
+
+
 class TestParticipantsDigest:
     def test_known_answer(self) -> None:
         assert (
@@ -208,10 +254,9 @@ class TestVerifyAnchor:
             {"sealed_at": 1.5},
             {"sealed_at": True},
             {"sealed_at": None},
-            {"trust_basis_commitment": "hmac-sha256:0a1b2c3d:" + "CD" * 32},
-            {"trust_basis_commitment": "hmac-sha256:0a1b2c:" + "cd" * 32},
-            {"trust_basis_commitment": "sha256:" + "cd" * 32},
+            {"trust_basis_commitment": "hmac-sha256:0a1b2c3d:é"},
             {"trust_basis_commitment": ""},
+            {"trust_basis_commitment": None},
             {"domain": "seam.audit.record-digest.v3"},
             {"ciphertext_hex": "abc"},
             {"ciphertext_hex": 12},

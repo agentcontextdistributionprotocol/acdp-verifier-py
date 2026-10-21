@@ -26,6 +26,11 @@ and log verdicts stay independently valid. That is why the verdict is returned a
 :class:`AnchorVerdict` and never raised. Core verification (:mod:`acdp_verifier.verify`)
 does not resolve anchors (§6 forbids requiring it), so callers opt in by calling
 :func:`verify_anchor`.
+
+A ``match`` means the disclosed slots are byte-exactly what Seam sealed. It does not mean
+they are valid labels: ``outcome``, ``classification`` and ``auth_method`` are hashed as
+disclosed, without checking them against Seam's value tables. Only the parsed slots are
+attested, never any other key of the disclosed object.
 """
 
 from __future__ import annotations
@@ -77,8 +82,6 @@ _SUPPORTED_SCHEMA_VERSIONS = frozenset({4})
 _U64_LIMIT = 1 << 64
 _DIGEST_HEX_RE = re.compile(r"[0-9a-f]{64}")
 _HEX_RE = re.compile(r"(?:[0-9a-f]{2})*")
-# ``hmac-sha256:<kid>:<hex>``: a 4-byte key id and the full 32-byte HMAC, both lowercase hex.
-_TRUST_BASIS_RE = re.compile(r"hmac-sha256:[0-9a-f]{8}:[0-9a-f]{64}")
 
 
 @dataclass(frozen=True)
@@ -255,8 +258,10 @@ def parse_disclosed_record(disclosed: Mapping[str, Any]) -> SealedRecordV4:
         raise _malformed("sealed_at must be an integer in the u64 range")
 
     trust_basis = _required_str(disclosed, "trust_basis_commitment")
-    if not _TRUST_BASIS_RE.fullmatch(trust_basis):
-        raise _malformed("trust_basis_commitment must be 'hmac-sha256:<8 hex>:<64 hex>'")
+    # Framed as an opaque ASCII string. The ``hmac-sha256:<kid>:<hex>`` rendering is
+    # descriptive, not normative: Seam's own worked vector uses ``hmac-sha256:k1:00``.
+    if not trust_basis.isascii():
+        raise _malformed("trust_basis_commitment must be ASCII")
 
     record = SealedRecordV4(
         decision_id=_required_str(disclosed, "decision_id"),
