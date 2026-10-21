@@ -149,11 +149,12 @@ applies it automatically in its blame view, but plain `git blame` does not —
 run `git config blame.ignoreRevsFile .git-blame-ignore-revs` once locally to
 get the same effect.
 
-Current conformance status: **98 in-scope fixtures PASS, 0 FAIL, 62 SKIP
-(explicit out-of-scope markers), 160 total** at spec `85088a6` — including every golden vector
+Current conformance status: **99 in-scope fixtures PASS, 0 FAIL, 62 SKIP
+(explicit out-of-scope markers), 161 total** at spec `1ed9bec` — including every golden vector
 (`sig-001..004`, `can-001..013`, `lin-001`, `fp-001`, `rcpt-001..006`,
 `rot-001`, `rev-001/002/006`, `lhr-001..004`, `log-001..005`, `wit-001..005`, `body-003`,
-`anc-001..005`) and the end-to-end verification of
+`anc-001..006`, where `anc-006` runs the `seam.decision` hook against Seam's
+known-answer vectors) and the end-to-end verification of
 `examples/retrieval/golden-context.json` and
 `golden-context-with-receipt.json`.
 
