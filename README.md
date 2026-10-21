@@ -65,6 +65,11 @@ shared with `acdp-rs`, and nothing shells out to any Rust binary. The two
 implementations meet only at the conformance pack's byte-pinned golden
 vectors — which is the point.
 
+The one construction ACDP does not own, the `seam.decision` record digest v4 in
+`acdp_verifier.seamdecision`, was likewise implemented from its owner's spec text
+(Seam `seam-event.v1.md` §Record digest at `seam-api-v0.48.0`), not from Seam's
+code. It is checked against the known-answer vectors that `anc-006` pins.
+
 ## Scope
 
 A **verification library plus fixture runner** — not an HTTP client, not a
