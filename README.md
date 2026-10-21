@@ -85,6 +85,7 @@ pluggable-store pattern RFC-ACDP-0001 §5.11 recommends).
 | `acdp_verifier.translog` | RFC 6962 leaf/node hashing (`0x00`/`0x01` domain separation), Merkle roots, inclusion/consistency proof generation and §9 verification folding, checkpoint verification (RFC-ACDP-0012) |
 | `acdp_verifier.revocation` | `key-revocation` shape (§4), not-self-signed rule (§5), compromise-boundary semantics (§7) (RFC-ACDP-0014) |
 | `acdp_verifier.cosignature` | Witness cosignatures: closed `acdp-log-cosignature` object (§4), the §5 signing construction (reused from `receipts`, keyed by the witness), the §8 consumer procedure (closed parse, witness-key signature, witness binding, checkpoint binding, `witnessed_at` skew), and §8 N-witnessed quorum evaluation (RFC-ACDP-0015) |
+| `acdp_verifier.seamdecision` | RFC-ACDP-0016 §6 scheme-aware hook for `seam.decision` anchors: recomputes the Seam record digest v4 (Seam `seam-api-v0.48.0`) from a disclosed sealed record → `match` / `mismatch` / `cannot_verify` (unknown `schema_version`, malformed or inconsistent disclosure), never touching the body's ACDP verdict |
 | `acdp_verifier.validation` | Structural validation: publish requests/bodies, the DataRef §6.6 checklist, metadata limits, capabilities §3.5 checklist (incl. the 0.3.0 idem-007 cross-field rule and caps-007), status pattern, closed-schema and absent-vs-null rules |
 | `acdp_verifier.verify` | The strict §5.11 pipeline: schema → hash recompute → key binding → resolution → signature |
 
