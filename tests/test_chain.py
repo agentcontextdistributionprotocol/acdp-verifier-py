@@ -714,3 +714,13 @@ def test_latest_historical_event_key_needs_a_receipt() -> None:
     del entry["event_receipts"]
     verdict = cc.run(bundle, as_of=None)
     assert cc.stage(verdict, cc.B, "latest", "retraction")["events_admitted"] == 0
+
+
+def test_log_leaf_uses_the_receipt_fingerprint_not_the_key_stage() -> None:
+    evidence, _ = _with_log(_log_bundle(), "2026-09-04T00:00:00.000Z", "2026-09-05T00:00:00.000Z")
+    # The producer key no longer resolves; the verified receipt still names it.
+    evidence["contexts"][cc.A]["body"]["signature"]["key_id"] = f"{cc.KEY_DID}#"
+    verdict = verify_chain([cc.A], evidence, as_of=None)
+    assert cc.value(verdict, cc.A, "latest", "key") == "unresolvable"
+    assert cc.value(verdict, cc.A, "latest", "registry_receipt") == "ok"
+    assert cc.value(verdict, cc.A, "latest", "log") == "included"
