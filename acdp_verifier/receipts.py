@@ -184,6 +184,7 @@ def verify_receipt(
     recomputed_content_hash: str,
     resolved_producer_key: tuple[str, bytes] | None = None,
     resolved_producer_fingerprint: str | None = None,
+    defer_key_binding: bool = False,
 ) -> ReceiptVerification:
     """RFC-ACDP-0010 §8 verification procedure (all six steps).
 
@@ -250,13 +251,16 @@ def verify_receipt(
             f"recomputed hash {recomputed_content_hash!r}"
         )
 
-    # Step 5 — key binding.
-    if resolved_producer_fingerprint is None:
+    # Step 5 — key binding (deferred when the caller has no producer key yet,
+    # RFC-ACDP-0017 §7.5).
+    if defer_key_binding:
+        pass
+    elif resolved_producer_fingerprint is None:
         if resolved_producer_key is None:
             raise InvalidReceipt("no resolved producer key supplied for step 5")
         algorithm, raw = resolved_producer_key
         resolved_producer_fingerprint = fingerprint(algorithm, raw)
-    if receipt["key_fingerprint"] != resolved_producer_fingerprint:
+    if not defer_key_binding and receipt["key_fingerprint"] != resolved_producer_fingerprint:
         raise InvalidReceipt(
             f"receipt.key_fingerprint {receipt['key_fingerprint']!r} != resolved "
             f"producer key fingerprint {resolved_producer_fingerprint!r}"

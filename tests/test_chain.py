@@ -341,8 +341,8 @@ def test_log_included_with_pinned_witness() -> None:
     }
     # The cosignature is dated after T: it does not count as of T.
     assert cc.stage(verdict, cc.A, "as_of", "log")["witnesses"] == 0
-    # A pinned witness's verified cosignature is evidence with a time (§5.4).
-    assert verdict["horizon"] == "2026-10-02T00:00:00.000Z"
+    # Cosignature witnessed_at is a bound, not an evidence time (§5.4).
+    assert verdict["horizon"] == "2026-09-30T00:00:00.000Z"
     unpinned = verify_chain([cc.A], evidence, as_of=cc.T)
     assert cc.stage(unpinned, cc.A, "latest", "log")["witnesses"] == 0
     assert unpinned["horizon"] == "2026-09-30T00:00:00.000Z"
@@ -552,3 +552,142 @@ def test_clock_is_never_read() -> None:
         raise AssertionError("verify_chain read a wall clock")
 
     verify_chain([cc.A], cc.kat_bundle(1), as_of=cc.T, clock=clock)
+
+
+# -- spec c411d94 rulings ------------------------------------------------------
+
+
+def test_discovery_ignores_unknown_records_and_picks_the_latest_complete() -> None:
+    bundle = cc.kat_bundle(1)
+    records = bundle["revocation_discovery"][cc.KEY_DID]
+    records.append(cc.discovery("2026-09-30T06:00:00.000Z", outcome="unknown", vantage="x.example"))
+    verdict = verify_chain([cc.A], bundle, as_of=cc.T)
+    assert cc.stage(verdict, cc.A, "as_of", "key_revocation") == {
+        "value": "not-revoked",
+        "basis": "observed",
+        "evidence_time": "2026-09-30T00:00:00.000Z",
+    }
+    records.append(cc.discovery("2026-09-30T03:00:00.000Z", vantage="b.example"))
+    verdict = verify_chain([cc.A], bundle, as_of=cc.T)
+    stage = cc.stage(verdict, cc.A, "as_of", "key_revocation")
+    assert stage["evidence_time"] == "2026-09-30T03:00:00.000Z"
+
+
+@pytest.mark.parametrize(
+    "key_id",
+    [
+        "did:web:elsewhere.example#key-1",  # key_id DID != agent_id
+        f"{cc.WEB_DID}#",  # empty fragment
+    ],
+)
+def test_evidence_independent_key_failure_is_unresolvable_in_both_passes(key_id: str) -> None:
+    bundle = cc.chain_002_bundle()
+    bundle.contexts[cc.B]["body"]["signature"]["key_id"] = key_id
+    verdict = cc.run(bundle)
+    for pass_ in ("as_of", "latest"):
+        assert cc.stage(verdict, cc.B, pass_, "key") == {"value": "unresolvable"}
+        assert cc.stage(verdict, cc.B, pass_, "signature") == {"value": "unresolvable"}
+        assert cc.node(verdict, cc.B)[pass_]["verdict"] == "refused"
+
+
+def test_undecodable_did_key_is_unresolvable_in_both_passes() -> None:
+    bundle = cc.chain_003_bundle()
+    body = bundle.contexts[cc.A]["body"]
+    bad = "did:key:z6MkInvalid"
+    body["agent_id"] = bad
+    body["signature"]["key_id"] = f"{bad}#z6MkInvalid"
+    verdict = cc.run(bundle)
+    for pass_ in ("as_of", "latest"):
+        assert cc.value(verdict, cc.A, pass_, "key") == "unresolvable"
+        assert cc.value(verdict, cc.A, pass_, "signature") == "unresolvable"
+
+
+def _two_events(r0: str, r1: str, *, receipt0_index: int = 0) -> cc.Bundle:
+    bundle = cc.chain_003_bundle()
+    entry = bundle.contexts[cc.B]
+    e0 = cc.make_event(
+        cc.B,
+        "retracted",
+        "2026-09-04T00:00:00.000Z",
+        cc.KEY_PRODUCER,
+        "00000000-0000-4000-8000-000000000001",
+    )
+    e1 = cc.make_event(
+        cc.B,
+        "republished",
+        "2026-09-05T00:00:00.000Z",
+        cc.KEY_PRODUCER,
+        "00000000-0000-4000-8000-000000000002",
+    )
+    entry["lifecycle_events"] = [e0, e1]
+    entry["event_receipts"] = [
+        cc.make_event_receipt(e0, receipt0_index, r0),
+        cc.make_event_receipt(e1, 1, r1),
+    ]
+    return bundle
+
+
+def test_republished_after_as_of_needs_retracted_as_of() -> None:
+    verdict = cc.run(_two_events("2026-09-04T00:00:01.000Z", "2026-10-02T00:00:00.000Z"))
+    assert cc.value(verdict, cc.B, "as_of", "retraction") == "retracted"
+    assert cc.value(verdict, cc.B, "latest", "retraction") == "not_retracted"
+    assert "republished_after_as_of" in cc.drift_kinds(verdict, cc.B)
+    # chain-003 C: as of T the stage is unknown, which never triggers it (§8.4).
+    verdict = cc.run(
+        _two_events("2026-09-04T00:00:01.000Z", "2026-09-06T00:00:00.000Z", receipt0_index=7)
+    )
+    assert cc.value(verdict, cc.B, "as_of", "retraction") == "unknown"
+    assert cc.value(verdict, cc.B, "latest", "retraction") == "not_retracted"
+    assert "republished_after_as_of" not in cc.drift_kinds(verdict, cc.B)
+
+
+def _unsigned_registry_event() -> dict[str, Any]:
+    return {
+        "event_id": "00000000-0000-4000-8000-000000000096",
+        "ctx_id": cc.B,
+        "event_type": "retracted",
+        "occurred_at": "2026-09-20T00:00:00.000Z",
+        "actor": cc.REGISTRY_DID,
+    }
+
+
+def test_unsigned_registry_event_is_admitted_on_its_receipt_alone() -> None:
+    bundle = cc.chain_003_bundle()
+    entry = bundle.contexts[cc.B]
+    event = _unsigned_registry_event()
+    entry["lifecycle_events"] = [event]
+    entry["event_receipts"] = [cc.make_event_receipt(event, 0, "2026-09-20T00:00:01.000Z")]
+    verdict = cc.run(bundle)
+    for pass_ in ("as_of", "latest"):
+        assert cc.value(verdict, cc.B, pass_, "retraction") == "retracted"
+    # Never without one: a receipt failing §10.3 leaves the event unadmitted.
+    entry["event_receipts"] = [cc.make_event_receipt(event, 3, "2026-09-20T00:00:01.000Z")]
+    verdict = cc.run(bundle)
+    for pass_ in ("as_of", "latest"):
+        assert cc.stage(verdict, cc.B, pass_, "retraction")["events_admitted"] == 0
+
+
+def test_as_of_event_key_must_be_in_assertion_method() -> None:
+    bundle = cc.chain_002_bundle()
+    event = cc.make_event(cc.B, "retracted", "2026-09-25T00:00:00.000Z", cc.WEB_KEY_2)
+    bundle.contexts[cc.B]["lifecycle_events"] = [event]
+    bundle.contexts[cc.B]["event_receipts"] = [
+        cc.make_event_receipt(event, 0, "2026-09-25T00:00:01.000Z")
+    ]
+    verdict = cc.run(bundle)
+    assert cc.value(verdict, cc.B, "as_of", "retraction") == "retracted"
+    # key-2 still in the document, but no longer in assertionMethod as of T.
+    bundle.did_documents[cc.WEB_DID] = [cc.web_snapshot("2026-09-30T00:00:00.000Z", ["key-1"])]
+    verdict = cc.run(bundle)
+    assert cc.stage(verdict, cc.B, "as_of", "retraction")["events_admitted"] == 0
+
+
+def test_receipt_key_binding_is_deferred_while_the_key_is_unknown() -> None:
+    # The receipt's key_fingerprint is still checked once a key is located.
+    bundle = cc._chain_007_bundle(early=False)
+    receipt = bundle.contexts[cc.A]["registry_receipt"]
+    receipt["key_fingerprint"] = "sha256:" + "00" * 32
+    cc.sign_registry(receipt)
+    verdict = cc.run(bundle)
+    assert cc.value(verdict, cc.A, "as_of", "registry_receipt") == "ok"
+    assert cc.value(verdict, cc.A, "latest", "registry_receipt") == "invalid"

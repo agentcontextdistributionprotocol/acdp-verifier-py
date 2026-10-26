@@ -91,6 +91,9 @@ def test_lifecycle_envelope_and_evidence_mismatches() -> None:
     bad_evidence["evidence_version"] = "acdp-evidence/0"
     result = _verify(change, bad_evidence)
     assert (result.accepted, result.reverify) == (False, (cc.B,))
+    foreign = copy.deepcopy(evidence)
+    foreign["contexts"][cc.B]["body"]["origin_registry"] = "other.example.com"
+    assert "origin_registry" in str(_verify(change, foreign).reason)
     missing = copy.deepcopy(evidence)
     del missing["contexts"][cc.B]
     assert "not retrieved" in str(_verify(change, missing).reason)
@@ -154,9 +157,20 @@ def test_superseded_rejections() -> None:
         "recorded_at": cc.T,
         "registry_receipt": evidence["contexts"][cc.B]["registry_receipt"],
     }
+    # B's receipt names B, not superseded_by (§7 envelope consistency).
+    assert "envelope" in str(_verify(sup, evidence).reason)
+    b_receipt = evidence["contexts"][cc.B]["registry_receipt"]
+    sup["registry_receipt"] = {**b_receipt, "ctx_id": cc.D}
     assert "not retrieved" in str(_verify(sup, evidence).reason)
-    sup["superseded_by"] = cc.A  # A verifies, but the entry carries B's receipt
-    assert "differs" in str(_verify(sup, evidence).reason)
+    assert "envelope" in str(_verify({**sup, "superseded_by": cc.B}, evidence).reason)
+    a_lineage = evidence["contexts"][cc.A]["body"]["lineage_id"]
+    sup.update(superseded_by=cc.A, lineage_id=a_lineage)
+    assert "envelope" in str(_verify(sup, evidence).reason)  # lineage_id != the receipt's
+    sup["registry_receipt"] = {**b_receipt, "ctx_id": cc.A, "lineage_id": a_lineage}
+    assert "differs" in str(_verify(sup, evidence).reason)  # A verifies; the receipt is not A's
+    foreign = copy.deepcopy(evidence)
+    foreign["contexts"][cc.A]["body"]["origin_registry"] = "other.example.com"
+    assert "origin_registry" in str(_verify(sup, foreign).reason)
     sup["registry_receipt"] = evidence["contexts"][cc.A]["registry_receipt"]
     assert "recorded_at" in str(_verify(sup, evidence).reason)
     sup["recorded_at"] = sup["registry_receipt"]["created_at"]
@@ -182,6 +196,11 @@ def test_key_revocation_rejections() -> None:
     reissued = {**change, "registry_receipt": rev["registry_receipt"]}
     assert "does not verify" in str(_verify(reissued, unbound.build()).reason)
     assert "recorded_at" in str(_verify({**change, "recorded_at": cc.T}, evidence).reason)
+    foreign = copy.deepcopy(evidence)
+    foreign["contexts"][cc.E]["body"]["origin_registry"] = "other.example.com"
+    assert "origin_registry" in str(_verify(change, foreign).reason)
+    renamed = {**change, "registry_receipt": {**change["registry_receipt"], "ctx_id": cc.A}}
+    assert "envelope" in str(_verify(renamed, evidence).reason)
     wrong_agent = {**change, "agent_id": cc.KEY_DID}
     assert "agent_id" in str(_verify(wrong_agent, evidence).reason)
     tampered_entry = copy.deepcopy(change)

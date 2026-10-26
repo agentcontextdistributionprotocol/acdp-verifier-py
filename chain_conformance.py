@@ -632,6 +632,26 @@ def run_chain_007(fixture: Mapping[str, Any], spec_dir: Path) -> None:
     )
     check(stage(verdict, A, "as_of", "signature") is None, "B: as_of signature stage present")
     _expect("B as_of verdict", node(verdict, A)["as_of"]["verdict"], "unknown")
+    # §7.5: receipt step 5 is deferred while the key is unknown, so the receipt
+    # still dates presence and binds identity.
+    receipt = stage(verdict, A, "as_of", "registry_receipt")
+    _expect(
+        "B as_of registry_receipt",
+        (receipt["value"], receipt["key_status"], receipt["basis"]),
+        ("ok", "current", "registry"),
+    )
+    presence = stage(verdict, A, "as_of", "presence")
+    _expect(
+        "B as_of presence",
+        (presence.get("evidence_time"), presence.get("basis")),
+        (receipt["evidence_time"], "registry"),
+    )
+    _expect(
+        "B as_of identity",
+        stage(verdict, A, "as_of", "identity"),
+        {"value": "ok", "basis": "registry"},
+    )
+    _expect("B as_of caveats", node(verdict, A)["as_of"]["caveats"], ["observed_basis"])
     _expect("B latest key", value(verdict, A, "latest", "key"), "historical_receipt_attested")
     _expect("B drift", drift_kinds(verdict, A), ["as_of_unprovable"])
 
@@ -822,10 +842,11 @@ def run_chain_010(fixture: Mapping[str, Any], spec_dir: Path) -> None:
     check(verdict["verdict_digest"] != base["verdict_digest"], "C: verdict_digest unchanged")
     check(verdict["evidence_digest"] != base["evidence_digest"], "C: evidence_digest unchanged")
     _expect("C as_of_digest", verdict["as_of_digest"], base["as_of_digest"])
-    # D — a discovery record dated <= T that changes a stage changes as_of_digest.
+    # D — a discovery record dated <= T that changes a stage changes as_of_digest:
+    # a `revoked` record the bundle carries no revocation for gives unknown (§7.9).
     bundle = chain_002_bundle()
     bundle.revocation_discovery[WEB_DID].append(
-        discovery("2026-09-30T12:00:00.000Z", outcome="unknown")
+        discovery("2026-09-30T12:00:00.000Z", outcome="revoked")
     )
     verdict = run(bundle)
     _expect("D as_of key_revocation", value(verdict, A, "as_of", "key_revocation"), "unknown")

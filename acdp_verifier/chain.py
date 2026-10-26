@@ -278,6 +278,7 @@ class _Revocation:
 @dataclass
 class _EventCheck:
     signature_ok: bool
+    registry_unsigned: bool  # unsigned, actor = origin registry DID: admitted on its receipt (§6.4)
     accepted_at: str | None  # set when the event receipt passes §10.3 steps 1-7 and 9
     receipt_basis: str | None
 
@@ -519,20 +520,24 @@ class _Pass:
                 current=True,
                 basis="self",
             )
-        if not did.startswith("did:web:") or key_id.partition("#")[0] != did:
-            return _Key("unresolvable")
+        key_did, _, fragment = key_id.partition("#")
+        if not did.startswith("did:web:") or key_did != did or not fragment:
+            return _Key("unresolvable")  # whatever the evidence: both passes (§7.6)
+        # From here on the outcome depends on the selected snapshot: as of T it
+        # is `unknown` (no_evidence_at_as_of), in the latest pass `unresolvable`.
+        missing = _Key("unknown" if self.as_of is not None else "unresolvable")
         selection = self.select_snapshot(did)
         if selection.snapshot is None:
-            return _Key("unknown" if self.as_of is not None else "unresolvable")
+            return missing
         snap = selection.snapshot
         if snap.document.get("id") != did:
-            return _Key("unresolvable")
+            return missing
         try:
             vm = resolve_verification_method(
                 snap.document, key_id, algorithm, require_assertion=False
             )
         except AcdpError:
-            return _Key("unresolvable")
+            return missing
         return _Key(
             "resolved",
             vm.algorithm,
@@ -600,7 +605,7 @@ class _Pass:
         except AcdpError:
             return _Receipt("invalid")
         producer = self.body_key(body)
-        if producer.fingerprint is None:
+        if producer.status == "unresolvable":
             return _Receipt("invalid")
         try:
             verify_receipt(
@@ -611,6 +616,8 @@ class _Pass:
                 body=body,
                 recomputed_content_hash=content_hash(producer_content(body)),
                 resolved_producer_fingerprint=producer.fingerprint,
+                # §7.5: step 5 is deferred while the key stage is `unknown`.
+                defer_key_binding=producer.status == "unknown",
             )
         except (AcdpError, ValueError):
             return _Receipt("invalid")
@@ -639,6 +646,8 @@ class _Pass:
             key = self.resolve_key(actor, sig.get("key_id"), sig.get("algorithm"))
             if key.status != "resolved":
                 return False
+            if self.as_of is not None and not key.current:
+                return False  # §6.4: a producer actor's key must be in assertionMethod as of T
             algorithm, public_key = key.algorithm, key.public_key
         elif actor == f"did:web:{body.get('origin_registry')}":
             _, raw, alg = self.registry_key(actor, sig.get("key_id"), sig.get("algorithm"))
@@ -705,8 +714,17 @@ class _Pass:
                     if receipts[i]["registry_did"] in self.pinned_registries
                     else "registry"
                 )
+            registry_unsigned = (
+                "signature" not in event
+                and event.get("actor") == f"did:web:{body.get('origin_registry')}"
+            )
             checks.append(
-                _EventCheck(self.event_signature_ok(event, ctx_key, body), accepted_at, basis)
+                _EventCheck(
+                    self.event_signature_ok(event, ctx_key, body),
+                    registry_unsigned,
+                    accepted_at,
+                    basis,
+                )
             )
         times = [c.accepted_at for c in checks if c.accepted_at is not None]
         monotonic = all(_le(a, b) for a, b in itertools.pairwise(times))
@@ -720,7 +738,11 @@ class _Pass:
         admitted: list[bool] = []
         bases: list[str] = []
         for event, check in zip(events, checks, strict=True):
-            if not check.signature_ok:
+            if check.registry_unsigned:
+                attested = check.accepted_at is not None  # never without its receipt
+            else:
+                attested = check.signature_ok
+            if not attested:
                 admitted.append(False)
                 bases.append("observed")
                 continue
@@ -862,25 +884,19 @@ class _Pass:
 
     def _discovery_stage(self, producer: str) -> JsonObj:
         """No applied revocation: the producer's discovery outcome (§7.9, RFC-ACDP-0014 §7 precedence)."""
-        latest_by_vantage: dict[str, tuple[datetime, int, Mapping[str, Any]]] = {}
+        complete: list[tuple[bool, datetime, int, Mapping[str, Any]]] = []
         for position, record in enumerate(self.discovery.get(producer, [])):
-            if not self.admits(record["completed_at"]):
+            if not self.admits(record["completed_at"]) or record["outcome"] == "unknown":
                 continue
-            rank = (_instant(record["completed_at"]), position)
-            prior = latest_by_vantage.get(record["vantage"])
-            if prior is None or rank > prior[:2]:
-                latest_by_vantage[record["vantage"]] = (*rank, record)
-        outcomes = [v[2] for v in latest_by_vantage.values()]
-        if not outcomes or any(r["outcome"] != "not-revoked-complete" for r in outcomes):
+            if record["outcome"] == "revoked":
+                # A vantage saw a revocation the bundle does not carry.
+                return {"value": "unknown"}
+            if record["outcome"] == "not-revoked-complete":
+                pinned = record["vantage"] in self.pinned_vantages
+                complete.append((pinned, _instant(record["completed_at"]), position, record))
+        if not complete:
             return {"value": "unknown"}
-        deciding = max(
-            outcomes,
-            key=lambda r: (
-                r["vantage"] in self.pinned_vantages,
-                _instant(r["completed_at"]),
-                [-b for b in _utf8(r["vantage"])],
-            ),
-        )
+        deciding = max(complete, key=lambda c: c[:3])[3]
         return {
             "value": "not-revoked",
             "basis": "pinned" if deciding["vantage"] in self.pinned_vantages else "observed",
@@ -1055,25 +1071,21 @@ class _Pass:
         return {"value": "ok", "basis": receipt.basis}
 
     def _key_stage(self, key: _Key, receipt: _Receipt) -> JsonObj:
-        # §7.6: `unresolvable` is a latest-pass value; its as-of equivalent is
-        # `unknown` with reason no_evidence_at_as_of.
-        unresolvable: JsonObj = (
-            {"value": "unresolvable"}
-            if self.as_of is None
-            else {"value": "unknown", "reason": _NO_EVIDENCE}
-        )
         if key.status == "unknown":
             return {"value": "unknown", "reason": _NO_EVIDENCE}
         if key.status == "unresolvable":
-            return unresolvable
+            return {"value": "unresolvable"}
         if key.current:
             value = "current"
         elif receipt.value == "ok":
             value = (
                 "historical_receipt_attested"  # RFC-ACDP-0010 §10: receipt step 5 matched this key
             )
+        elif self.as_of is not None:
+            # The chosen snapshot does not authorize the key: snapshot-dependent (§7.6).
+            return {"value": "unknown", "reason": _NO_EVIDENCE}
         else:
-            return unresolvable
+            return {"value": "unresolvable"}
         stage: JsonObj = {"value": value}
         if key.basis is not None:
             stage["basis"] = key.basis
@@ -1159,26 +1171,7 @@ def _horizon(latest: _Pass) -> str | None:
         if not _checkpoint_verifies(latest, checkpoint):
             continue
         times.append(checkpoint["timestamp"])
-        for cosig in item.get("cosignatures", []):
-            witness = str(cosig["witness_id"])
-            if witness not in latest.pinned_witnesses:
-                continue
-            docs: dict[str, Mapping[str, Any]] = {}
-            snap = (
-                latest.select_snapshot(witness).snapshot if witness.startswith("did:web:") else None
-            )
-            if snap is not None:
-                docs[witness] = snap.document
-            try:
-                verify_cosignature(
-                    cosig,
-                    checkpoint=checkpoint,
-                    did_documents=docs,
-                    trusted_witnesses=latest.pinned_witnesses,
-                )
-            except AcdpError:
-                continue
-            times.append(cosig["witnessed_at"])
+    # Cosignature witnessed_at values are bounds, not evidence times (§5.4).
     if not times:
         return None
     return max(times, key=_instant)
@@ -1224,11 +1217,7 @@ def _drift_kinds(
         kinds.append("revoked_after_as_of")
     if value(b, "retraction") == "retracted" and value(a, "retraction") != "retracted":
         kinds.append("retracted_after_as_of")
-    if (
-        value(b, "retraction") == "not_retracted"
-        and value(a, "retraction") != "not_retracted"
-        and b["retraction"].get("events_admitted", 0) > 0
-    ):
+    if value(a, "retraction") == "retracted" and value(b, "retraction") == "not_retracted":
         kinds.append("republished_after_as_of")
     entry = bundle["contexts"].get(ctx_key)
     if entry is not None and b["presence"]["value"] == "present":

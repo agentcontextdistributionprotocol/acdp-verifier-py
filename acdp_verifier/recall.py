@@ -163,8 +163,13 @@ def verify_change(
     if kind == "lifecycle":
         return _verify_lifecycle(entry, evidence, relied, retrieved=retrieved)
     if kind == "superseded":
-        return _verify_superseded(entry, evidence, relied)
-    return _verify_key_revocation(entry, evidence, relied)
+        return _verify_superseded(entry, evidence, relied, registry_authority)
+    return _verify_key_revocation(entry, evidence, relied, registry_authority)
+
+
+def _origin_bound(body: Mapping[str, Any], registry_authority: str) -> bool:
+    """§7 origin binding: the retrieved body comes from the registry serving the feed."""
+    return body.get("origin_registry") == registry_authority
 
 
 def _verify_lifecycle(
@@ -178,6 +183,8 @@ def _verify_lifecycle(
     body = held["body"]
     if body.get("ctx_id") != ctx_id or event["ctx_id"] != ctx_id or receipt["ctx_id"] != ctx_id:
         return _reject("envelope ctx_id does not match the evidence", ctx_id)
+    if not _origin_bound(body, ctx_id_authority(ctx_id)):
+        return _reject("the context's origin_registry is not the feed's authority", ctx_id)
     if entry["lineage_id"] != body.get("lineage_id") or entry["agent_id"] != body.get("agent_id"):
         return _reject("envelope lineage_id/agent_id does not match the context", ctx_id)
     if entry["recorded_at"] != receipt["accepted_at"]:
@@ -207,12 +214,16 @@ def _verify_lifecycle(
     contexts[ctx_id] = patched
     latest = _Pass({**evidence, "contexts": contexts}, None, None, True)
 
-    if not latest.event_signature_ok(event, ctx_id, body):
-        return _reject("event signature does not verify (RFC-ACDP-0013 §5)", ctx_id)
     if latest.event_receipt_time(receipt, index, event, ctx_id, body) is None:
         return _reject("event receipt fails RFC-ACDP-0017 §10.3", ctx_id)
     checks, _ = latest.event_checks(ctx_id)
-    if not all(c.signature_ok for c in checks[: index + 1]):
+    # An unsigned origin-registry event stands on its verified receipt (RFC-ACDP-0017 §6.4).
+    if not (checks[index].signature_ok or checks[index].registry_unsigned):
+        return _reject("event signature does not verify (RFC-ACDP-0013 §5)", ctx_id)
+    if not all(
+        c.signature_ok or (c.registry_unsigned and c.accepted_at is not None)
+        for c in checks[:index]
+    ):
         return _reject("an earlier event does not verify", ctx_id)
     state = latest.retraction_stage(ctx_id)["value"]
     if state == "invalid":
@@ -223,13 +234,22 @@ def _verify_lifecycle(
 
 
 def _verify_superseded(
-    entry: Mapping[str, Any], evidence: Mapping[str, Any], relied: set[str]
+    entry: Mapping[str, Any], evidence: Mapping[str, Any], relied: set[str], authority: str
 ) -> ChangeResult:
     ctx_id = str(entry["ctx_id"])
     new_id = str(entry["superseded_by"])
+    receipt = entry["registry_receipt"]
+    if (
+        new_id == ctx_id
+        or receipt["ctx_id"] != new_id
+        or receipt["lineage_id"] != entry["lineage_id"]
+    ):
+        return _reject("envelope ctx_id/lineage_id does not match the receipt", ctx_id)
     held = evidence["contexts"].get(new_id)
     if held is None or "registry_receipt" not in held:
         return _reject("superseded_by was not retrieved with its receipt", ctx_id)
+    if not _origin_bound(held["body"], authority):
+        return _reject("superseded_by's origin_registry is not the feed's authority", ctx_id)
     latest = _Pass(evidence, None, None, True)
     stages = latest.node(new_id, cycle=False)["stages"]
     if (
@@ -255,12 +275,16 @@ def _verify_superseded(
 
 
 def _verify_key_revocation(
-    entry: Mapping[str, Any], evidence: Mapping[str, Any], relied: set[str]
+    entry: Mapping[str, Any], evidence: Mapping[str, Any], relied: set[str], authority: str
 ) -> ChangeResult:
     ctx_id = str(entry["ctx_id"])
+    if entry["registry_receipt"]["ctx_id"] != ctx_id:
+        return _reject("envelope ctx_id does not match the receipt", ctx_id)
     held = evidence["contexts"].get(ctx_id)
     if held is None or "registry_receipt" not in held:
         return _reject("the revocation context was not retrieved with its receipt", ctx_id)
+    if not _origin_bound(held["body"], authority):
+        return _reject("the revocation's origin_registry is not the feed's authority", ctx_id)
     latest = _Pass(evidence, None, None, True)
     if latest.receipt(ctx_id).value != "ok":
         return _reject("the served registry_receipt fails RFC-ACDP-0010 §8", ctx_id)
