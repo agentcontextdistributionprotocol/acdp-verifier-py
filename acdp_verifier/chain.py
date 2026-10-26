@@ -262,6 +262,7 @@ class _Receipt:
     reason: str | None = None
     registry_did: str | None = None
     receipt_hash: str | None = None
+    key_fingerprint: str | None = None  # the registry's attestation of the signing key
 
 
 @dataclass(frozen=True)
@@ -605,8 +606,6 @@ class _Pass:
         except AcdpError:
             return _Receipt("invalid")
         producer = self.body_key(body)
-        if producer.status == "unresolvable":
-            return _Receipt("invalid")
         try:
             verify_receipt(
                 receipt,
@@ -616,8 +615,8 @@ class _Pass:
                 body=body,
                 recomputed_content_hash=content_hash(producer_content(body)),
                 resolved_producer_fingerprint=producer.fingerprint,
-                # §7.5: step 5 is deferred while the key stage is `unknown`.
-                defer_key_binding=producer.status == "unknown",
+                # §7.5: step 5 is deferred while the key stage locates no key.
+                defer_key_binding=producer.status != "resolved",
             )
         except (AcdpError, ValueError):
             return _Receipt("invalid")
@@ -628,6 +627,7 @@ class _Pass:
             created_at=receipt["created_at"],
             registry_did=registry_did,
             receipt_hash=receipt_hash(receipt),
+            key_fingerprint=receipt["key_fingerprint"],
         )
 
     # -- lifecycle events (§7.8, §10.3) ---------------------------------------
@@ -856,10 +856,13 @@ class _Pass:
         receipt_authority = (
             _did_web_authority_of(receipt.registry_did or "") if receipt.value == "ok" else None
         )
+        # With no located key, a verified receipt's key_fingerprint places the
+        # node (§7.5; step 5 bound it when a key was located).
+        fingerprint = key.fingerprint if key.fingerprint is not None else receipt.key_fingerprint
         applicable: list[_Revocation] = []
-        if key.fingerprint is not None:
+        if fingerprint is not None:
             for rev in self.revocations():
-                if rev.statement.revoked_key_fingerprint != key.fingerprint:
+                if rev.statement.revoked_key_fingerprint != fingerprint:
                     continue
                 if rev.registry_attested:
                     if rev.statement.controller != agent_id:
