@@ -23,6 +23,11 @@ from acdp_verifier.hashing import content_hash, derive_lineage_id, sha256_prefix
 from acdp_verifier.signing import ed25519_public_key_from_seed, sign_ed25519
 from chain_conformance import JsonObj, check, load_json
 
+_REV_CLASS = {
+    revocation.BoundaryVerdict.HISTORICALLY_AUTHORIZED_PRE_COMPROMISE: "pre-compromise",
+    revocation.BoundaryVerdict.FAIL_CLOSED_IN_WINDOW: "revoked",
+    revocation.BoundaryVerdict.FAIL_CLOSED_TIME_UNVERIFIABLE: "unplaceable",
+}
 T_NOW = "2026-10-27T00:00:00.000Z"
 PINNED_RECEIPT_KEY = "sha256:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d"
 # trust-006's second issuer: the sig-001 zero seed, a different did:key.
@@ -229,12 +234,28 @@ def run_trust_002(fixture: Mapping[str, Any], spec_dir: Path) -> None:
         receipt_attested_created_at="2026-10-26T00:00:01.000Z",
         receipt_key_status=Authorization.CURRENT,
     )
-    revoked = verdict is not revocation.BoundaryVerdict.HISTORICALLY_AUTHORIZED_PRE_COMPROMISE
-    check(revoked, f"I: classification {verdict}")
+    klass = _REV_CLASS[verdict]
+    check(klass == "revoked", f"I: classification {verdict}")
     _rejected(
-        lambda: trustlist.validate_list_version(good, pin, issuer_key_revoked=revoked),
+        lambda: trustlist.validate_list_version(good, pin, issuer_key_revocation=klass),
         "step 5",
         "I revoked issuer key",
+    )
+    # Step 5 fails only on an applied revocation (25f8d3a). unknown, the usual
+    # offline case, passes unless the consumer refuses it by local policy.
+    for passes in ("not-revoked", "pre-compromise", "unknown"):
+        trustlist.validate_list_version(good, pin, issuer_key_revocation=passes)
+    _rejected(
+        lambda: trustlist.validate_list_version(good, pin, issuer_key_revocation="unplaceable"),
+        "step 5",
+        "I unplaceable",
+    )
+    _rejected(
+        lambda: trustlist.validate_list_version(
+            good, pin, issuer_key_revocation="unknown", refuse_unknown_revocation=True
+        ),
+        "step 5",
+        "I unknown under local policy",
     )
 
     # With no valid version at hand the pin is list_invalid and trusts nothing.

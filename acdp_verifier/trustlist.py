@@ -31,6 +31,7 @@ __all__ = [
     "LIST_TYPE",
     "OUTCOMES",
     "REPORT_VERSION",
+    "REVOCATION_CLASSES",
     "TRUST_LIST_VERSION",
     "IssuerPin",
     "ListInvalid",
@@ -55,6 +56,11 @@ RECEIPTS_PROFILE = "acdp-registry-receipts"
 # §6.2 steps 3-4: best first.
 OUTCOMES = ("trusted", "expired", "out_of_scope", "untrusted_registry", "list_invalid")
 _RANK = {name: rank for rank, name in enumerate(OUTCOMES)}
+# RFC-ACDP-0014 §7 key_revocation classes; §5.2 step 5 fails only on an applied one.
+REVOCATION_CLASSES = frozenset(
+    {"not-revoked", "pre-compromise", "unknown", "revoked", "unplaceable"}
+)
+_APPLIED_REVOCATION = frozenset({"revoked", "unplaceable"})
 
 _LIST_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 _WEB_DID_RE = re.compile(
@@ -279,14 +285,18 @@ def validate_list_version(
     pin: IssuerPin,
     *,
     did_documents: Mapping[str, Mapping[str, Any]] | None = None,
-    issuer_key_revoked: bool = False,
+    issuer_key_revocation: str = "not-revoked",
+    refuse_unknown_revocation: bool = False,
     retracted_by: Collection[str] = (),
 ) -> ListVersion:
     """Run §5.2 over a candidate list body; raise :class:`ListInvalid` when it fails.
 
     *did_documents* holds the issuer's DID document as the pass selects it
-    (§5.2 step 1). *issuer_key_revoked* is the RFC-ACDP-0014 §7 refusal for
-    the verifying key (step 5). *retracted_by* lists the actors of the admitted
+    (§5.2 step 1). *issuer_key_revocation* is the RFC-ACDP-0014 §7 class of
+    the verifying key for this version (step 5): only an applied revocation,
+    ``revoked`` or ``unplaceable``, fails the step. ``unknown`` passes unless
+    the consumer opts into *refuse_unknown_revocation* (local policy).
+    *retracted_by* lists the actors of the admitted
     ``retracted`` events against this version; only the issuer's count (§5.3).
     """
     try:
@@ -309,8 +319,12 @@ def validate_list_version(
         validate_list_metadata(metadata)
     except SchemaViolation as exc:
         raise ListInvalid(f"step 4: {exc}") from exc
-    if issuer_key_revoked:
-        raise ListInvalid("step 5: the issuer key is revoked for this version")
+    if issuer_key_revocation not in REVOCATION_CLASSES:
+        raise ValueError(f"unknown RFC-ACDP-0014 §7 class {issuer_key_revocation!r}")
+    if issuer_key_revocation in _APPLIED_REVOCATION or (
+        refuse_unknown_revocation and issuer_key_revocation == "unknown"
+    ):
+        raise ListInvalid(f"step 5: issuer key_revocation is {issuer_key_revocation}")
     return ListVersion(
         serial=metadata["serial"],
         issued_at=metadata["issued_at"],
