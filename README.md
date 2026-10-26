@@ -161,8 +161,8 @@ applies it automatically in its blame view, but plain `git blame` does not —
 run `git config blame.ignoreRevsFile .git-blame-ignore-revs` once locally to
 get the same effect.
 
-Current conformance status: **113 in-scope fixtures PASS, 0 FAIL, 68 SKIP
-(explicit out-of-scope markers), 181 total** at spec `aa9701c` — including every golden vector
+Current conformance status: **113 in-scope fixtures PASS, 0 FAIL, 75 SKIP
+(explicit out-of-scope markers), 188 total** at spec `fe94ee0` — including every golden vector
 (`sig-001..004`, `can-001..013`, `lin-001`, `fp-001`, `rcpt-001..006`,
 `rot-001`, `rev-001/002/006/007` (`rev-007`: the 20 RFC-ACDP-0014 §7 classification known answers), `lhr-001..004`, `log-001..005`, `wit-001..005`, `body-003`,
 `anc-001..006`, where `anc-006` runs the `seam.decision` hook against Seam's
