@@ -52,6 +52,7 @@ from acdp_verifier.fingerprint import (
     fingerprint_p256_xy,
 )
 from acdp_verifier.timeutil import parse_rfc3339
+from chain_conformance import CHAIN_EXECUTORS, RECALL_EXECUTORS, ScenarioFailure
 
 JsonObj = dict[str, Any]
 
@@ -106,6 +107,12 @@ _SKIP_IDS: dict[str, str] = {
     "did-001": SKIP_DID_FETCH,
     "rot-002": SKIP_DID_FETCH,
     "rev-005": SKIP_DISCOVERY,
+    "rec-001": SKIP_REGISTRY,
+    "rec-002": SKIP_REGISTRY,
+    "rec-003": SKIP_REGISTRY,
+    "rec-004": SKIP_REGISTRY,
+    "rec-005": SKIP_REGISTRY,
+    "rec-008": SKIP_REGISTRY,
 }
 
 REGISTRY_AUTHORITY = "registry.example.com"
@@ -2372,6 +2379,19 @@ for _i in range(1, 15):
     _EXECUTORS[f"schema-{_i:03d}"] = run_schema_generic
 
 
+def _spec_dir_executor(fn: Callable[[JsonObj, Path], None]) -> Executor:
+    """Adapt a chain_conformance executor (fixture, spec_dir) to the runner's signature."""
+
+    def run_fixture(fixture: JsonObj, ctx: SpecContext) -> None:
+        fn(fixture, ctx.spec_dir)
+
+    return run_fixture
+
+
+for _fid, _fn in {**CHAIN_EXECUTORS, **RECALL_EXECUTORS}.items():
+    _EXECUTORS[_fid] = _spec_dir_executor(_fn)
+
+
 def _family_of(fixture_id: str) -> str:
     if fixture_id.startswith("data-ref-ssrf"):
         return "data-ref-ssrf"
@@ -2414,7 +2434,7 @@ def run(spec_dir: Path) -> int:
         try:
             executor(fixture, ctx)
             results.append(Result(fixture_id, "PASS"))
-        except CheckFailure as exc:
+        except (CheckFailure, ScenarioFailure) as exc:
             results.append(Result(fixture_id, "FAIL", str(exc)))
         except Exception as exc:  # noqa: BLE001 - report, don't crash the run
             results.append(Result(fixture_id, "FAIL", f"{type(exc).__name__}: {exc}"))
