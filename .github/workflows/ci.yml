@@ -34,7 +34,7 @@ jobs:
         id: spec
         uses: agentcontextdistributionprotocol/acdp-ci/actions/checkout-spec@015910153b61c32abbe018afe85d44868897bf3b # v1
         with:
-          ref: 3d41e31fb85a7c21d14f2221486ace367b03f6ef
+          ref: 34635bc31f96db6215abae53bbac58c4d44d16aa
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
