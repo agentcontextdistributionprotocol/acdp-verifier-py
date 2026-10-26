@@ -633,9 +633,18 @@ class _Pass:
     # -- lifecycle events (§7.8, §10.3) ---------------------------------------
 
     def event_signature_ok(
-        self, event: Mapping[str, Any], ctx_key: str, body: Mapping[str, Any]
+        self,
+        event: Mapping[str, Any],
+        ctx_key: str,
+        body: Mapping[str, Any],
+        *,
+        receipted: bool = False,
     ) -> bool:
-        """RFC-ACDP-0013 §5 consumer verification, with the pass's key evidence."""
+        """RFC-ACDP-0013 §5 consumer verification, with the pass's key evidence.
+
+        ``receipted`` says the event's receipt passes §10.3; only then may a
+        producer key outside ``assertionMethod`` sign it, in the latest pass (§7.8).
+        """
         sig = event.get("signature")
         if not isinstance(sig, Mapping) or event.get("ctx_id") != ctx_key:
             return False
@@ -646,8 +655,10 @@ class _Pass:
             key = self.resolve_key(actor, sig.get("key_id"), sig.get("algorithm"))
             if key.status != "resolved":
                 return False
-            if self.as_of is not None and not key.current:
-                return False  # §6.4: a producer actor's key must be in assertionMethod as of T
+            if not key.current and (self.as_of is not None or not receipted):
+                # §6.4: in assertionMethod as of T; latest (§7.8): a historical
+                # key only with a verified event receipt.
+                return False
             algorithm, public_key = key.algorithm, key.public_key
         elif actor == f"did:web:{body.get('origin_registry')}":
             _, raw, alg = self.registry_key(actor, sig.get("key_id"), sig.get("algorithm"))
@@ -720,7 +731,9 @@ class _Pass:
             )
             checks.append(
                 _EventCheck(
-                    self.event_signature_ok(event, ctx_key, body),
+                    self.event_signature_ok(
+                        event, ctx_key, body, receipted=accepted_at is not None
+                    ),
                     registry_unsigned,
                     accepted_at,
                     basis,

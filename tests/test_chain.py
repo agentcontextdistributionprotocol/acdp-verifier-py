@@ -691,3 +691,18 @@ def test_receipt_key_binding_is_deferred_while_the_key_is_unknown() -> None:
     verdict = cc.run(bundle)
     assert cc.value(verdict, cc.A, "as_of", "registry_receipt") == "ok"
     assert cc.value(verdict, cc.A, "latest", "registry_receipt") == "invalid"
+
+
+def test_latest_historical_event_key_needs_a_receipt() -> None:
+    bundle = cc.chain_002_bundle()
+    event = cc.make_event(cc.B, "retracted", "2026-09-25T00:00:00.000Z", cc.WEB_KEY_2)
+    entry = bundle.contexts[cc.B]
+    entry["lifecycle_events"] = [event]
+    # key-2 is in verificationMethod but not assertionMethod.
+    bundle.did_documents[cc.WEB_DID] = [cc.web_snapshot("2026-09-30T00:00:00.000Z", ["key-1"])]
+    entry["event_receipts"] = [cc.make_event_receipt(event, 0, "2026-09-25T00:00:01.000Z")]
+    verdict = cc.run(bundle, as_of=None)
+    assert cc.stage(verdict, cc.B, "latest", "retraction")["value"] == "retracted"
+    del entry["event_receipts"]
+    verdict = cc.run(bundle, as_of=None)
+    assert cc.stage(verdict, cc.B, "latest", "retraction")["events_admitted"] == 0
