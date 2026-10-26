@@ -33,6 +33,7 @@ from acdp_verifier import (
     hashing,
     headreceipt,
     jcs,
+    mcp,
     receipts,
     revocation,
     seamdecision,
@@ -65,7 +66,8 @@ SKIP_REGISTRY = "out-of-scope: live-registry behavior (needs a running registry)
 
 SKIP_MCP_PROXY = (
     "out-of-scope: producer profile (acdp-producer-mcp-proxy, RFC-ACDP-0019 Draft). "
-    "These fixtures bind an MCP signing proxy; this verifier is a consumer and runs no proxy"
+    "These fixtures bind an MCP signing proxy; this verifier is a consumer and runs no proxy. "
+    "The consumer side (§4.3) is executed in mcp-001 and mcp-003"
 )
 
 _SKIP_FAMILIES: dict[str, str] = {
@@ -2113,6 +2115,108 @@ def run_rev_007(fixture: JsonObj, ctx: SpecContext) -> None:
         check(got == vector["expected"], f"{vector['name']}: got {got}, want {vector['expected']}")
 
 
+def _mcp001(ctx: SpecContext) -> tuple[JsonObj, JsonObj, JsonObj]:
+    """mcp-001's vector: (inputs, expected, retrieved body = publish body + registry fields)."""
+    fixture = ctx.fixture("mcp-001")
+    check(len(fixture["vectors"]) == 1, "mcp-001: expected one vector")
+    vector = fixture["vectors"][0]
+    expected = vector["expected"]
+    body = {**expected["publish_request_body"], **vector["registry_assigned"]}
+    return vector["inputs"], expected, body
+
+
+def run_mcp_001(fixture: JsonObj, ctx: SpecContext) -> None:
+    """RFC-ACDP-0019 §4.2-§4.3 consumer recomputation of the mcp-001 known answers."""
+    inputs, expected, retrieved = _mcp001(ctx)
+    salt = mcp.decode_salt(inputs["salt"])
+    check(salt.hex() == expected["salt_hex"], "salt decode")
+    hashed = mcp.hashed_result(inputs["call_tool_result"])
+    check(hashed == expected["hashed_result"], "hashed result excludes _meta")
+    for name, value in (
+        ("arguments_hash", inputs["arguments"]),
+        ("result_hash", hashed),
+        ("request_id_hash", inputs["request_id"]),
+    ):
+        got = mcp.call_hash(value, salt)
+        check(got == expected[name], f"{name}: {got}")
+        check(got == expected["publish_request_body"]["metadata"][name], f"record {name}")
+    got = mcp.endpoint_hash(inputs["endpoint"])
+    check(got == expected["endpoint_hash"], f"endpoint_hash: {got}")
+    # The retrieved body (publish body + registry fields) through RFC-ACDP-0001
+    # §5.11; the registry fields are outside ProducerContent (did:key proxy).
+    body = expected["publish_request_body"]
+    check(
+        jcs.canonicalize_any(hashing.producer_content(body)).decode() == expected["canonical_form"],
+        "canonical form",
+    )
+    result = verify.verify_context_body(retrieved)
+    check(result.content_hash == expected["content_hash"], "content_hash")
+    check(body["signature"]["value"] == expected["signature_value_base64"], "signature value")
+
+
+def run_mcp_003(fixture: JsonObj, ctx: SpecContext) -> None:
+    """mcp-003 D: the §4.3 holder recompute over mcp-001, plus one-byte negatives."""
+    check(_scenario(fixture, "D")["behavior"].startswith("A consumer holding"), "D premise")
+    inputs, expected, body = _mcp001(ctx)
+    returned = expected["returned_result"]
+    trusted = {body["agent_id"]}
+
+    def holder(
+        b: JsonObj = body,
+        result: JsonObj = returned,
+        arguments: JsonObj = inputs["arguments"],
+        request_id: Any = inputs["request_id"],
+        proxies: set[str] = trusted,
+    ) -> mcp.ToolResultVerification:
+        return mcp.verify_tool_result(
+            b,
+            result,
+            tool="regional_fraud_rate",
+            trusted_proxies=proxies,
+            arguments=arguments,
+            request_id=request_id,
+        )
+
+    ok = holder()
+    check(ok.salted and ok.arguments_checked and ok.request_id_checked, "D: full check")
+    mismatch = mcp.ProvenanceMismatch.code
+    text = returned["content"][0]["text"]
+    changed_result = {**returned, "content": [{"type": "text", "text": "F" + text[1:]}]}
+    expect_code(lambda: holder(result=changed_result), mismatch, "D: one content byte")
+    args = inputs["arguments"]
+    changed_args = {**args, "query": args["query"][:-1] + "N"}
+    expect_code(lambda: holder(arguments=changed_args), mismatch, "one argument byte")
+    expect_code(lambda: holder(request_id=18), mismatch, "another request id")
+    expect_code(lambda: holder(request_id="17"), mismatch, "request id as a string")
+    expect_code(lambda: holder(proxies=set()), mismatch, "untrusted proxy")
+    meta = returned["_meta"]
+    provenance = meta[mcp.PROVENANCE_META_KEY]
+    salt = provenance["salt"]
+    wrong_salt = salt[:-1] + ("A" if salt[-1] != "A" else "Q")
+    for what, value, code in (
+        ("another salt", wrong_salt, mismatch),
+        ("padded salt", salt + "=", "schema_violation"),
+        ("non-canonical salt bits", salt[:-1] + "9", "schema_violation"),
+    ):
+        relinked = {
+            **returned,
+            "_meta": {**meta, mcp.PROVENANCE_META_KEY: {**provenance, "salt": value}},
+        }
+        expect_code(functools.partial(holder, result=relinked), code, what)
+    # The link copied onto another body's content_hash fails step 1 (§8.4).
+    relinked = {
+        **returned,
+        "_meta": {
+            **meta,
+            mcp.PROVENANCE_META_KEY: {**provenance, "content_hash": "sha256:" + "0" * 64},
+        },
+    }
+    expect_code(lambda: holder(result=relinked), mismatch, "link content_hash")
+    expect_code(
+        lambda: holder(b={**body, "title": body["title"] + "."}), "hash_mismatch", "altered body"
+    )
+
+
 def run_rcpt_005(fixture: JsonObj, ctx: SpecContext) -> None:
     """Receipt-key status (RFC-ACDP-0010 §8 step 1) and RFC-ACDP-0014 §7 step 1."""
     receipt = ctx.rcpt001_receipt()
@@ -2392,6 +2496,8 @@ _EXECUTORS: dict[str, Executor] = {
     "rev-001": run_rev_001,
     "rev-002": run_rev_002,
     "rev-007": run_rev_007,
+    "mcp-001": run_mcp_001,
+    "mcp-003": run_mcp_003,
     "lhr-001": run_lhr_001,
     "lhr-002": run_lhr_002,
     "lhr-003": run_lhr_003,
@@ -2493,7 +2599,9 @@ def run(spec_dir: Path) -> int:
         fixture_id = str(fixture.get("id", path.stem))
         family = _family_of(fixture_id)
 
-        skip_reason = _SKIP_IDS.get(fixture_id) or _SKIP_FAMILIES.get(family)
+        skip_reason = _SKIP_IDS.get(fixture_id) or (
+            None if fixture_id in _EXECUTORS else _SKIP_FAMILIES.get(family)
+        )
         if skip_reason is not None:
             results.append(Result(fixture_id, "SKIP", skip_reason))
             continue
