@@ -585,9 +585,17 @@ def test_evidence_independent_key_failure_is_unresolvable_in_both_passes(key_id:
     bundle.contexts[cc.B]["body"]["signature"]["key_id"] = key_id
     verdict = cc.run(bundle)
     for pass_ in ("as_of", "latest"):
-        assert cc.stage(verdict, cc.B, pass_, "key") == {"value": "unresolvable"}
         assert cc.stage(verdict, cc.B, pass_, "signature") == {"value": "unresolvable"}
         assert cc.node(verdict, cc.B)[pass_]["verdict"] == "refused"
+        # §7.5: step 5 is deferred, so the receipt still verifies and binds identity.
+        assert cc.value(verdict, cc.B, pass_, "registry_receipt") == "ok"
+        assert cc.stage(verdict, cc.B, pass_, "identity") == {"value": "ok", "basis": "registry"}
+    assert cc.stage(verdict, cc.B, "as_of", "key") == {"value": "unresolvable"}
+    # The receipt's key_fingerprint names the revoked key-1: placement uses it.
+    revocation = cc.stage(verdict, cc.B, "latest", "key_revocation")
+    assert (revocation["value"], revocation["revocation_ctx_id"]) == ("revoked", cc.E)
+    assert cc.value(verdict, cc.B, "latest", "key") == "revoked"
+    assert "revoked_after_as_of" in cc.drift_kinds(verdict, cc.B)
 
 
 def test_undecodable_did_key_is_unresolvable_in_both_passes() -> None:
