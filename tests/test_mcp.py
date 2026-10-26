@@ -131,6 +131,27 @@ def test_wrong_type_and_open_record_rejected() -> None:
         _verify(body, held)
 
 
+def test_absent_request_id_hash_leaves_request_id_unchecked() -> None:
+    body, held = _setup()
+    del body["metadata"]["request_id_hash"]
+    cc.sign_body(body, cc.KEY_PRODUCER)
+    held["_meta"][mcp.PROVENANCE_META_KEY]["content_hash"] = body["content_hash"]
+    assert not _verify(body, held, request_id=7).request_id_checked
+
+
+@pytest.mark.parametrize(
+    ("member", "value", "step"),
+    [("ctx_id", CTX[:-1] + "0", 1), ("registry", "partner.example.org", 1)],
+)
+def test_link_binding_is_step_1(member: str, value: str, step: int) -> None:
+    body, held = _setup()
+    held["_meta"][mcp.PROVENANCE_META_KEY][member] = value
+    with pytest.raises(mcp.ProvenanceMismatch) as info:
+        _verify(body, held)
+    assert info.value.step == step
+    assert info.value.unrecognised
+
+
 def test_failed_link_is_not_a_link() -> None:
     body, held = _setup()
     held["_meta"][mcp.PROVENANCE_META_KEY] = {"failed": True}

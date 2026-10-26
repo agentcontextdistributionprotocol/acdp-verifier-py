@@ -62,7 +62,7 @@ future promotion stalls.
 ## Independence claim
 
 This codebase was implemented **from the RFC texts and JSON schemas only**
-(`rfcs/RFC-ACDP-0001/0002/0007/0010/0011/0012/0013/0014/0015/0017/0018/0019`, `schemas/json/*`,
+(`rfcs/RFC-ACDP-0001/0002/0007/0010/0011/0012/0013/0014/0015/0017/0018/0019/0020`, `schemas/json/*`,
 and the conformance fixtures' pinned *expectations* under
 `schemas/conformance/`). No algorithmic code was read from, ported from, or
 shared with `acdp-rs`, and nothing shells out to any Rust binary. The two
@@ -100,6 +100,7 @@ pluggable-store pattern RFC-ACDP-0001 §5.11 recommends).
 | `acdp_verifier.evidence` | The `acdp-evidence/1` schema gate (RFC-ACDP-0017 §4.1: a malformed bundle is rejected whole), plus the closed lifecycle-event, event-receipt and registry-receipt shapes |
 | `acdp_verifier.chain` | `verify_chain` (RFC-ACDP-0017): the deterministic BFS walk with limits, frontier and cycle detection; the as-of and latest passes over §6.2 snapshot selection and §6.3 pinned options; all nine §7 stages incl. §10.3 event-receipt verification and the RFC-ACDP-0014 revocation fold; §8 caveats, verdicts, tainted paths and drift; the §9 verdict object with `verdict_digest` / `as_of_digest`. Reads no wall clock |
 | `acdp_verifier.mcp` | RFC-ACDP-0019 consumer side: the §4.3 hashed result and salted/unsalted call hashes, strict 32-byte base64url salt, and `verify_tool_result`, the five-step holder check of a `CallToolResult` against its `io.acdp/provenance` link (the proxy side is out of scope) |
+| `acdp_verifier.trustlist` | RFC-ACDP-0020 consumer side: issuer pins, §5.2 list-version validation (the closed `acdp-trust-list/1` object included), §5.3–§5.4 series state and version selection (floor, rollback, equivocation, issuer-only retraction, as-of), §6.2 body evaluation, and the deterministic `acdp-trust-report/1` (§8), including `chain_trust_report` over an RFC-ACDP-0017 verdict |
 | `acdp_verifier.recall` | RFC-ACDP-0018 consumer side: §7 `verify_change` for `lifecycle` / `superseded` / `key_revocation` entries over the consumer's own retrievals, the §8.2 `ACDP-Signature` HMAC (key = UTF-8 of the secret string), and a no-I/O `RecallConsumer` (dedupe by authority+seq, cursor after a whole page, resync on `cursor_expired`, pull from its own cursor on a hint) |
 
 **Out of scope** (skipped by the runner with explicit markers, never
@@ -162,15 +163,17 @@ applies it automatically in its blame view, but plain `git blame` does not —
 run `git config blame.ignoreRevsFile .git-blame-ignore-revs` once locally to
 get the same effect.
 
-Current conformance status: **115 in-scope fixtures PASS, 0 FAIL, 73 SKIP
-(explicit out-of-scope markers), 188 total** at spec `fe94ee0` — including every golden vector
+Current conformance status: **122 in-scope fixtures PASS, 0 FAIL, 73 SKIP
+(explicit out-of-scope markers), 195 total** at spec `47cb0cc` — including every golden vector
 (`sig-001..004`, `can-001..013`, `lin-001`, `fp-001`, `rcpt-001..006`,
 `rot-001`, `rev-001/002/006/007` (`rev-007`: the 20 RFC-ACDP-0014 §7 classification known answers), `lhr-001..004`, `log-001..005`, `wit-001..005`, `body-003`,
 `anc-001..006`, where `anc-006` runs the `seam.decision` hook against Seam's
 known-answer vectors; the RFC-ACDP-0017 known-answer verdicts `chain-001/002/003/010` and the 27
 cross-implementation edge vectors of `chain-011` reproduced byte for byte; the RFC-ACDP-0019
 consumer side in `mcp-001` (the salted call hashes, `endpoint_hash` and the signed body) and
-`mcp-003` D (the §4.3 holder recompute and its one-byte negatives); and `rec-007`'s `hint-hmac-001`) and the end-to-end verification of
+`mcp-003` D (the §4.3 holder recompute, each negative at its failing step); the RFC-ACDP-0020
+trust lists in `trust-001` (the golden list, all 20 evaluation rows and the golden trust report)
+and the behavioral `trust-002..007`; and `rec-007`'s `hint-hmac-001`) and the end-to-end verification of
 `examples/retrieval/golden-context.json` and
 `golden-context-with-receipt.json`.
 

@@ -69,12 +69,24 @@ _RECORD_MEMBERS = _RECORD_REQUIRED | {"request_id_hash"}
 
 
 class ProvenanceMismatch(AcdpError):
-    """The body is validly signed but is not a record of the held call (§4.3).
+    """A §4.3 holder check failed at :attr:`step` (1-5).
 
-    RFC-ACDP-0019 §9 defines no new error codes, so this code is verifier-local.
+    The outcome is a local verdict with no wire code (§4.3, §9), so this code
+    is verifier-local. Steps 1-2 mean an untrusted or unrecognised record;
+    steps 3-5 mean a record that does not match the held call. A body failing
+    the §5.11 pipeline itself raises that pipeline's own error (step 1).
     """
 
     code = "provenance_mismatch"
+
+    def __init__(self, message: str, *, step: int) -> None:
+        super().__init__(f"§4.3 step {step}: {message}")
+        self.step = step
+
+    @property
+    def unrecognised(self) -> bool:
+        """True for steps 1-2 (untrusted or unrecognised), False for 3-5 (no match)."""
+        return self.step <= 2
 
 
 @dataclass(frozen=True)
@@ -133,9 +145,9 @@ def _record(body: Mapping[str, Any]) -> Mapping[str, Any]:
     return record
 
 
-def _require(actual: str, expected: Any, what: str) -> None:
+def _require(actual: str, expected: Any, what: str, step: int) -> None:
     if actual != expected:
-        raise ProvenanceMismatch(f"{what}: recomputed {actual}, record has {expected}")
+        raise ProvenanceMismatch(f"{what}: recomputed {actual}, record has {expected}", step=step)
 
 
 def verify_tool_result(
@@ -157,51 +169,57 @@ def verify_tool_result(
     meta = result.get("_meta")
     provenance = meta.get(PROVENANCE_META_KEY) if isinstance(meta, Mapping) else None
     if not isinstance(provenance, Mapping) or provenance.get("failed") is True:
-        raise SchemaViolation("result carries no published io.acdp/provenance link")
-    if "ctx_id" in body and body["ctx_id"] != provenance.get("ctx_id"):
-        raise ProvenanceMismatch("retrieved body's ctx_id is not the provenance ctx_id")
-    if "origin_registry" in body and body["origin_registry"] != provenance.get("registry"):
-        raise ProvenanceMismatch("provenance registry is not the body's origin_registry")
+        raise ProvenanceMismatch("result carries no published io.acdp/provenance link", step=1)
 
-    # Step 1: the body verifies as any body; the link names its content_hash.
+    # Step 1: the body verifies as any body, and is the one the link names.
     verified = verify_context_body(body, did_documents=did_documents)
-    if verified.content_hash != provenance.get("content_hash"):
-        raise ProvenanceMismatch("provenance content_hash is not the body's content_hash")
+    for member, link_member, value in (
+        ("ctx_id", "ctx_id", body["ctx_id"]),
+        ("origin_registry", "registry", body["origin_registry"]),
+        ("content_hash", "content_hash", verified.content_hash),
+    ):
+        if value != provenance.get(link_member):
+            raise ProvenanceMismatch(f"body {member} is not the link's {link_member}", step=1)
 
-    # Step 2: a trusted proxy, and the right type.
+    # Step 2: a trusted proxy, the right type, and a closed record we know.
     agent_id = body["agent_id"]
     if agent_id not in trusted_proxies:
-        raise ProvenanceMismatch(f"agent_id {agent_id} is not a trusted proxy")
+        raise ProvenanceMismatch(f"agent_id {agent_id} is not a trusted proxy", step=2)
     if body.get("type") != RECORD_TYPE:
-        raise ProvenanceMismatch(f"type {body.get('type')!r} is not {RECORD_TYPE}")
-    record = _record(body)
+        raise ProvenanceMismatch(f"type {body.get('type')!r} is not {RECORD_TYPE}", step=2)
+    try:
+        record = _record(body)
+    except SchemaViolation as exc:
+        raise ProvenanceMismatch(str(exc), step=2) from exc
 
     # Step 3: the form `salted` names; the salt is present exactly when salted (§6).
+    salt: bytes | None = None
     if record["salted"]:
-        salt: bytes | None = decode_salt(provenance.get("salt"))
+        try:
+            salt = decode_salt(provenance.get("salt"))
+        except SchemaViolation as exc:
+            raise ProvenanceMismatch(str(exc), step=3) from exc
     elif "salt" in provenance:
-        raise SchemaViolation("provenance carries a salt but the record is unsalted")
-    else:
-        salt = None
+        raise ProvenanceMismatch("the link carries a salt but the record is unsalted", step=3)
 
     # Step 4: result_hash, tool and is_error.
-    _require(call_hash(hashed_result(result), salt), record["result_hash"], "result_hash")
+    _require(call_hash(hashed_result(result), salt), record["result_hash"], "result_hash", 4)
     if record["tool"] != tool:
-        raise ProvenanceMismatch(f"record tool {record['tool']!r} is not {tool!r}")
+        raise ProvenanceMismatch(f"record tool {record['tool']!r} is not {tool!r}", step=4)
     if record["is_error"] != result.get("isError", False):
-        raise ProvenanceMismatch("record is_error does not match the result's isError")
+        raise ProvenanceMismatch("record is_error does not match the result's isError", step=4)
 
-    # Step 5 (MAY): the request the holder sent.
+    # Step 5 (MAY): the request the holder sent. An absent request_id_hash
+    # leaves the request id unchecked; it is not a mismatch.
     if arguments is not None:
-        _require(call_hash(dict(arguments), salt), record["arguments_hash"], "arguments_hash")
-    if request_id is not None:
-        if "request_id_hash" not in record:
-            raise ProvenanceMismatch("record has no request_id_hash to check")
-        _require(call_hash(request_id, salt), record["request_id_hash"], "request_id_hash")
+        _require(call_hash(dict(arguments), salt), record["arguments_hash"], "arguments_hash", 5)
+    request_id_checked = request_id is not None and "request_id_hash" in record
+    if request_id_checked:
+        _require(call_hash(request_id, salt), record["request_id_hash"], "request_id_hash", 5)
     return ToolResultVerification(
         body=verified,
         agent_id=agent_id,
         salted=salt is not None,
         arguments_checked=arguments is not None,
-        request_id_checked=request_id is not None,
+        request_id_checked=request_id_checked,
     )
