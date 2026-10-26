@@ -921,15 +921,17 @@ class _Pass:
 
     # -- log (§7.7) -----------------------------------------------------------
 
-    def log_stage(self, ctx_key: str, key: _Key, receipt: _Receipt) -> JsonObj:
+    def log_stage(self, ctx_key: str, receipt: _Receipt) -> JsonObj:
         entry = self.contexts[ctx_key]
         inclusion = entry.get("log_inclusion")
         if inclusion is None:
             return {"value": "absent"}
         checkpoint = inclusion["log_checkpoint"]
+        # The leaf's key_fingerprint comes from the verified receipt, never the
+        # key stage (§7.7): no verified receipt, no leaf.
         if (
             receipt.value != "ok"
-            or key.fingerprint is None
+            or receipt.key_fingerprint is None
             or not self.admits(checkpoint["timestamp"])
         ):
             return {"value": "cannot_verify"}
@@ -946,7 +948,7 @@ class _Pass:
             "origin_registry": body["origin_registry"],
             "created_at": body["created_at"],
             "content_hash": content_hash(producer_content(body)),
-            "key_fingerprint": key.fingerprint,
+            "key_fingerprint": receipt.key_fingerprint,
             "receipt_hash": receipt.receipt_hash,
         }
         try:
@@ -1064,7 +1066,7 @@ class _Pass:
                 k: v for k, v in revocation.items() if k in ("value", "basis", "evidence_time")
             }
         stages["key"] = key_stage
-        stages["log"] = self.log_stage(ctx_key, key, receipt)
+        stages["log"] = self.log_stage(ctx_key, receipt)
         stages["retraction"] = self.retraction_stage(ctx_key)
         stages["key_revocation"] = revocation
         return _verdict(stages, as_of=self.as_of is not None)
