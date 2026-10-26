@@ -2043,6 +2043,70 @@ def run_rev_006(fixture: JsonObj, ctx: SpecContext) -> None:
     check(verdict is revocation.BoundaryVerdict.FAIL_CLOSED_IN_WINDOW, f"B verdict: {verdict}")
 
 
+# RFC-ACDP-0014 §7 precedence across lookups: refusal > unknown > pre-compromise > not-revoked.
+_REV_RANK = {"not-revoked": 0, "pre-compromise": 1, "unknown": 2, "revoked": 3, "unplaceable": 3}
+_REV_CLASS = {
+    revocation.BoundaryVerdict.HISTORICALLY_AUTHORIZED_PRE_COMPROMISE: "pre-compromise",
+    revocation.BoundaryVerdict.FAIL_CLOSED_IN_WINDOW: "revoked",
+    revocation.BoundaryVerdict.FAIL_CLOSED_TIME_UNVERIFIABLE: "unplaceable",
+}
+
+
+def _classify_key_revocation(inp: JsonObj) -> JsonObj:
+    """RFC-ACDP-0014 §7 over already-verified inputs: scope, fold, placement, precedence."""
+    context = inp["context"]
+    applicable: list[tuple[revocation.RevocationStatement, str]] = []
+    for member in inp["revocations"]:
+        # §10 equivalence; any other type is ignored and never disarms (§7).
+        if member["type"] not in revocation.REVOCATION_TYPES:
+            continue
+        if member["revoked_key_fingerprint"] != context["key_fingerprint"]:
+            continue
+        controller = (
+            member["agent_id"]
+            if member["trust_class"] == "producer-signed"
+            else member["revoked_key_controller"]
+        )
+        statement = revocation.RevocationStatement(
+            member["revoked_key_fingerprint"], member["compromised_since"], controller
+        )
+        if revocation.applies_to(statement, context["agent_id"]):
+            applicable.append((statement, member["ctx_id"]))  # retracted members count
+    result: JsonObj = {"key_revocation": "not-revoked", "boundary": None, "revocation_ctx_id": None}
+    if applicable:
+        boundary = revocation.effective_boundary([s for s, _ in applicable])  # earliest T (§4)
+        statement, ctx_id = next((s, c) for s, c in applicable if s.compromised_since == boundary)
+        receipt = inp["receipt"]
+        verified = receipt is not None and receipt["verified"]
+        status = (
+            didweb.Authorization.CURRENT
+            if verified and receipt["key_status"] == "current"
+            else didweb.Authorization.HISTORICAL
+        )
+        verdict = revocation.classify_against_boundary(
+            statement,
+            receipt_attested_created_at=receipt["created_at"] if verified else None,
+            receipt_key_status=status,
+        )
+        result = {
+            "key_revocation": _REV_CLASS[verdict],
+            "boundary": boundary,
+            "revocation_ctx_id": ctx_id,
+        }
+    if inp["unknown_lookups"] > 0 and _REV_RANK["unknown"] > _REV_RANK[result["key_revocation"]]:
+        result = {"key_revocation": "unknown", "boundary": None, "revocation_ctx_id": None}
+    return result
+
+
+def run_rev_007(fixture: JsonObj, ctx: SpecContext) -> None:
+    """RFC-ACDP-0014 §7 key_revocation classification known answers."""
+    vectors = fixture["vectors"]
+    check(len(vectors) == 20, f"rev-007: {len(vectors)} vectors, expected 20")
+    for vector in vectors:
+        got = _classify_key_revocation(vector["input"])
+        check(got == vector["expected"], f"{vector['name']}: got {got}, want {vector['expected']}")
+
+
 def run_rcpt_005(fixture: JsonObj, ctx: SpecContext) -> None:
     """Receipt-key status (RFC-ACDP-0010 §8 step 1) and RFC-ACDP-0014 §7 step 1."""
     receipt = ctx.rcpt001_receipt()
@@ -2321,6 +2385,7 @@ _EXECUTORS: dict[str, Executor] = {
     "rot-001": run_rot_001,
     "rev-001": run_rev_001,
     "rev-002": run_rev_002,
+    "rev-007": run_rev_007,
     "lhr-001": run_lhr_001,
     "lhr-002": run_lhr_002,
     "lhr-003": run_lhr_003,

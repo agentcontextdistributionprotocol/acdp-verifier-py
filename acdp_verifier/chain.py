@@ -29,7 +29,7 @@ from .evidence import EVENT_RECEIPT_TYPE, validate_evidence
 from .fingerprint import fingerprint
 from .hashing import content_hash, derive_lineage_id, producer_content, sha256_prefixed
 from .receipts import receipt_hash, resolve_receipt_key, verify_receipt
-from .revocation import RevocationStatement, validate_revocation_shape
+from .revocation import REVOCATION_TYPES, RevocationStatement, validate_revocation_shape
 from .signing import p256_public_key_from_sec1, verify_ed25519, verify_p256
 from .timeutil import is_canonical_ms, parse_rfc3339
 from .translog import LEAF_VERSION, ReceiptState, verify_checkpoint, verify_log_inclusion
@@ -48,7 +48,6 @@ __all__ = [
 VERDICT_VERSION = "acdp-chain-verdict/1"
 DEFAULT_LIMITS: Mapping[str, int] = {"max_depth": 10, "max_nodes": 500, "max_fanout": 100}
 _MIN_LIMITS: Mapping[str, int] = {"max_depth": 0, "max_nodes": 1, "max_fanout": 0}
-_REVOCATION_TYPES = frozenset({"key-revocation", "acdp:key-revocation"})
 _NO_EVIDENCE = "no_evidence_at_as_of"
 
 # Basis strength, weakest first: a stage resting on several pieces of
@@ -809,7 +808,7 @@ class _Pass:
     def _revocation(self, ctx_key: str) -> _Revocation | None:
         """A verified, applied key-revocation context (RFC-ACDP-0014 §5/§6, §5.3)."""
         body = self.contexts[ctx_key]["body"]
-        if body.get("type") not in _REVOCATION_TYPES or body.get("ctx_id") != ctx_key:
+        if body.get("type") not in REVOCATION_TYPES or body.get("ctx_id") != ctx_key:
             return None
         try:
             statement = validate_revocation_shape(body)
