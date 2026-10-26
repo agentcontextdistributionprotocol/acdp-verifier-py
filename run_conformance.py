@@ -63,6 +63,11 @@ JsonObj = dict[str, Any]
 SKIP_TRANSPORT = "out-of-scope: transport (SSRF / live-HTTP defenses)"
 SKIP_REGISTRY = "out-of-scope: live-registry behavior (needs a running registry)"
 
+SKIP_MCP_PROXY = (
+    "out-of-scope: producer profile (acdp-producer-mcp-proxy, RFC-ACDP-0019 Draft). "
+    "These fixtures bind an MCP signing proxy; this verifier is a consumer and runs no proxy"
+)
+
 _SKIP_FAMILIES: dict[str, str] = {
     "did-ssrf": SKIP_TRANSPORT,
     "data-ref-ssrf": SKIP_TRANSPORT,
@@ -73,6 +78,7 @@ _SKIP_FAMILIES: dict[str, str] = {
     "rate": SKIP_REGISTRY,
     "err": SKIP_REGISTRY,
     "lc": SKIP_REGISTRY,
+    "mcp": SKIP_MCP_PROXY,
 }
 SKIP_DID_FETCH = (
     "out-of-scope: transport (DID-document fetch/cache/re-fetch; RFC-ACDP-0001 §5.11 "
