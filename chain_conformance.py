@@ -880,6 +880,14 @@ _VERDICT_MEMBERS = frozenset(
     }
 )
 
+
+def run_chain_011(fixture: Mapping[str, Any], spec_dir: Path) -> None:
+    # The cross-implementation edge vectors (acdp-rs and this verifier agreed
+    # byte for byte at spec 263c3c4): known answers only.
+    _expect("vector count", len(fixture.get("vectors", [])), 27)
+    run_known_answers(fixture, spec_dir)
+
+
 CHAIN_EXECUTORS = {
     "chain-001": run_chain_001,
     "chain-002": run_chain_002,
@@ -891,6 +899,7 @@ CHAIN_EXECUTORS = {
     "chain-008": run_chain_008,
     "chain-009": run_chain_009,
     "chain-010": run_chain_010,
+    "chain-011": run_chain_011,
 }
 
 

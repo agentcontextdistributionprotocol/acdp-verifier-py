@@ -5,10 +5,11 @@ second implementation required by the spec's RELEASE.md to promote Draft
 surfaces to Final. It served that role for the ACDP 0.2.0/0.3.0 lines
 (RFC-ACDP-0010/0011/0012/0014, `did:key`, the divergence corpus), both now
 Final, and gates the 0.4.0 line today (RFC-ACDP-0015, witness cosigning —
-see "Project status" below). On the open 0.5.0 line it is the second
-implementation for RFC-ACDP-0017 (chain verification, `acdp-consumer-chain`)
-and the consumer side of RFC-ACDP-0018 (retraction recall,
-`acdp-consumer-recall`). The first implementation is
+see "Project status" below). On the 0.5.0 line it was the second
+implementation that took RFC-ACDP-0017 (chain verification,
+`acdp-consumer-chain`) to Final (tag `rfc-acdp-0017-v0.5.0`; its §10–§11
+stay Draft), and it is the second implementation of the consumer side of
+RFC-ACDP-0018 (retraction recall, `acdp-consumer-recall`). The first implementation is
 [`acdp-rs`](../acdp-rs); the Python/Node bindings there wrap the same Rust
 core and therefore do not count as independent.
 
@@ -160,13 +161,13 @@ applies it automatically in its blame view, but plain `git blame` does not —
 run `git config blame.ignoreRevsFile .git-blame-ignore-revs` once locally to
 get the same effect.
 
-Current conformance status: **111 in-scope fixtures PASS, 0 FAIL, 68 SKIP
-(explicit out-of-scope markers), 179 total** at spec `263c3c4` — including every golden vector
+Current conformance status: **112 in-scope fixtures PASS, 0 FAIL, 68 SKIP
+(explicit out-of-scope markers), 180 total** at spec `1511b08` — including every golden vector
 (`sig-001..004`, `can-001..013`, `lin-001`, `fp-001`, `rcpt-001..006`,
 `rot-001`, `rev-001/002/006`, `lhr-001..004`, `log-001..005`, `wit-001..005`, `body-003`,
 `anc-001..006`, where `anc-006` runs the `seam.decision` hook against Seam's
-known-answer vectors; the RFC-ACDP-0017 known-answer verdicts `chain-001/002/003/010`
-reproduced byte for byte; and `rec-007`'s `hint-hmac-001`) and the end-to-end verification of
+known-answer vectors; the RFC-ACDP-0017 known-answer verdicts `chain-001/002/003/010` and the 27
+cross-implementation edge vectors of `chain-011` reproduced byte for byte; and `rec-007`'s `hint-hmac-001`) and the end-to-end verification of
 `examples/retrieval/golden-context.json` and
 `golden-context-with-receipt.json`.
 
