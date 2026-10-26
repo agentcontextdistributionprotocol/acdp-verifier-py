@@ -185,3 +185,9 @@ def test_chain_report_requires_pass_time() -> None:
         trustlist.chain_trust_report(latest_only, bundle, [], pass_="as_of")
     with pytest.raises(ValueError, match="needs T"):
         trustlist.chain_trust_report(latest_only, bundle, [], pass_="latest")
+
+
+def test_equivocation_outranks_retraction_at_the_top_serial() -> None:
+    v = [_version(3), _version(4, retracted=True), _version(4, content_hash="sha256:" + "f" * 64)]
+    got = trustlist.select_version(PIN, v, t=T, as_of=False)
+    assert (got.status, got.reason) == ("invalid", "equivocation")

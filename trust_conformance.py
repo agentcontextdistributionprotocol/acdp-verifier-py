@@ -480,10 +480,9 @@ def run_trust_007(fixture: Mapping[str, Any], spec_dir: Path) -> None:
     base = cc.kat_bundle(1)
     bundle, list_body = _with_list(lists)
 
-    # A: the list leaves the chain-001 verdict unchanged but for its digests and,
-    # per RFC-ACDP-0017 §5.4 (the horizon is over all timed evidence in the
-    # bundle), the horizon, which the list's later receipt moves. The fixture
-    # and RFC-ACDP-0020 §7 list only the digests; reported to the spec.
+    # A: the list changes only evidence_digest, verdict_digest and the horizon,
+    # which becomes max(old, the list's timed evidence) per RFC-ACDP-0017 §5.4
+    # (RFC-ACDP-0020 §7); as_of_digest never moves.
     before = verify_chain([cc.A], base, as_of=cc.T)
     verdict = verify_chain([cc.A], bundle, as_of=cc.T)
     for member in verdict:
@@ -493,6 +492,11 @@ def run_trust_007(fixture: Mapping[str, Any], spec_dir: Path) -> None:
     check(verdict["evidence_digest"] != before["evidence_digest"], "A: evidence_digest moves")
     list_time = bundle["contexts"][list_body["ctx_id"]]["registry_receipt"]["created_at"]
     check(verdict["horizon"] == max(before["horizon"], list_time), "A: horizon (§5.4)")
+    check(
+        (before["horizon"], verdict["horizon"])
+        == ("2026-09-30T00:00:00.000Z", "2026-10-26T00:00:01.000Z"),
+        "A: the fixture's chain-001 horizon move",
+    )
     # A list whose evidence is no later than the horizon leaves it, too, unchanged.
     early, _ = _with_list(lists, retrieved_at="2026-09-03T00:00:00.000Z")
     check(verify_chain([cc.A], early, as_of=cc.T)["horizon"] == before["horizon"], "A: early list")
