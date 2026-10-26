@@ -42,6 +42,7 @@ __all__ = [
     "as_of_projection",
     "digest",
     "normalize_pinned",
+    "verified_receipt_keys",
     "verify_chain",
 ]
 
@@ -262,6 +263,7 @@ class _Receipt:
     registry_did: str | None = None
     receipt_hash: str | None = None
     key_fingerprint: str | None = None  # the registry's attestation of the signing key
+    signing_key_fingerprint: str | None = None  # the registry key that signed the receipt
 
 
 @dataclass(frozen=True)
@@ -627,6 +629,7 @@ class _Pass:
             registry_did=registry_did,
             receipt_hash=receipt_hash(receipt),
             key_fingerprint=receipt["key_fingerprint"],
+            signing_key_fingerprint=_key_fingerprint(sig["algorithm"], key.public_key),
         )
 
     # -- lifecycle events (§7.8, §10.3) ---------------------------------------
@@ -1402,3 +1405,31 @@ def verify_chain(
         {k: v for k, v in verdict.items() if k not in ("as_of_digest", "verdict_digest")}
     )
     return verdict
+
+
+def verified_receipt_keys(
+    evidence: Mapping[str, Any],
+    ctx_ids: Iterable[str],
+    *,
+    as_of: str | None = None,
+    pinned: Mapping[str, Any] | None = None,
+    require_attested_events: bool = True,
+) -> dict[str, tuple[str, str]]:
+    """``ctx_id -> (registry_did, signing-key fingerprint)`` for each receipt whose
+    ``registry_receipt`` stage is ``ok`` in the pass (*as_of* None: latest).
+
+    Consumers that apply registry policy to a verdict's nodes (RFC-ACDP-0020 §8)
+    need the key that signed the receipt, which the closed verdict does not carry.
+    """
+    validate_evidence(evidence)
+    run = _Pass(evidence, normalize_pinned(pinned), as_of, require_attested_events)
+    out: dict[str, tuple[str, str]] = {}
+    for ctx_key in ctx_ids:
+        if ctx_key not in evidence["contexts"]:
+            continue
+        receipt = run.receipt(ctx_key)
+        if receipt.value == "ok":
+            assert receipt.registry_did is not None
+            assert receipt.signing_key_fingerprint is not None
+            out[ctx_key] = (receipt.registry_did, receipt.signing_key_fingerprint)
+    return out

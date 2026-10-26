@@ -54,6 +54,7 @@ from acdp_verifier.fingerprint import (
 )
 from acdp_verifier.timeutil import parse_rfc3339
 from chain_conformance import CHAIN_EXECUTORS, RECALL_EXECUTORS, ScenarioFailure
+from trust_conformance import TRUST_EXECUTORS
 
 JsonObj = dict[str, Any]
 
@@ -2154,6 +2155,18 @@ def run_mcp_001(fixture: JsonObj, ctx: SpecContext) -> None:
     check(body["signature"]["value"] == expected["signature_value_base64"], "signature value")
 
 
+def signing_resign_mcp(ctx: SpecContext, body: JsonObj) -> JsonObj:
+    """Re-sign an mcp-001 body with its test key (the published zero seed)."""
+    seed = bytes.fromhex(ctx.fixture("mcp-001")["test_keypair"]["private_seed_hex"])
+    signed = {**body, "content_hash": hashing.content_hash(hashing.producer_content(body))}
+    signed["signature"] = {
+        "algorithm": "ed25519",
+        "key_id": f"{body['agent_id']}#{body['agent_id'].removeprefix('did:key:')}",
+        "value": base64.b64encode(signing.sign_ed25519(seed, signed["content_hash"])).decode(),
+    }
+    return signed
+
+
 def run_mcp_003(fixture: JsonObj, ctx: SpecContext) -> None:
     """mcp-003 D: the §4.3 holder recompute over mcp-001, plus one-byte negatives."""
     check(_scenario(fixture, "D")["behavior"].startswith("A consumer holding"), "D premise")
@@ -2179,39 +2192,57 @@ def run_mcp_003(fixture: JsonObj, ctx: SpecContext) -> None:
 
     ok = holder()
     check(ok.salted and ok.arguments_checked and ok.request_id_checked, "D: full check")
-    mismatch = mcp.ProvenanceMismatch.code
+
+    def expect_step(fn: Callable[[], object], step: int, what: str) -> None:
+        # §4.3: the failed step is reported; 1-2 unrecognised, 3-5 no match.
+        try:
+            fn()
+        except mcp.ProvenanceMismatch as exc:
+            check(exc.step == step, f"{what}: failed at step {exc.step}, want {step}")
+            check(exc.unrecognised == (step <= 2), f"{what}: step class")
+            return
+        raise CheckFailure(f"{what}: expected a step-{step} mismatch, but it verified")
+
     text = returned["content"][0]["text"]
     changed_result = {**returned, "content": [{"type": "text", "text": "F" + text[1:]}]}
-    expect_code(lambda: holder(result=changed_result), mismatch, "D: one content byte")
+    expect_step(lambda: holder(result=changed_result), 4, "D: one content byte")
     args = inputs["arguments"]
     changed_args = {**args, "query": args["query"][:-1] + "N"}
-    expect_code(lambda: holder(arguments=changed_args), mismatch, "one argument byte")
-    expect_code(lambda: holder(request_id=18), mismatch, "another request id")
-    expect_code(lambda: holder(request_id="17"), mismatch, "request id as a string")
-    expect_code(lambda: holder(proxies=set()), mismatch, "untrusted proxy")
+    expect_step(lambda: holder(arguments=changed_args), 5, "one argument byte")
+    expect_step(lambda: holder(request_id=18), 5, "another request id")
+    expect_step(lambda: holder(request_id="17"), 5, "request id as a string")
+    expect_step(lambda: holder(proxies=set()), 2, "untrusted proxy")
     meta = returned["_meta"]
     provenance = meta[mcp.PROVENANCE_META_KEY]
     salt = provenance["salt"]
     wrong_salt = salt[:-1] + ("A" if salt[-1] != "A" else "Q")
-    for what, value, code in (
-        ("another salt", wrong_salt, mismatch),
-        ("padded salt", salt + "=", "schema_violation"),
-        ("non-canonical salt bits", salt[:-1] + "9", "schema_violation"),
+    for what, member, value, step in (
+        ("another salt", "salt", wrong_salt, 4),
+        ("padded salt", "salt", salt + "=", 3),
+        ("non-canonical salt bits", "salt", salt[:-1] + "9", 3),
+        # The link copied onto another body fails step 1 (§8.4).
+        ("link content_hash", "content_hash", "sha256:" + "0" * 64, 1),
+        ("link ctx_id", "ctx_id", body["ctx_id"][:-1] + "0", 1),
+        ("link registry", "registry", "partner.example.org", 1),
     ):
         relinked = {
             **returned,
-            "_meta": {**meta, mcp.PROVENANCE_META_KEY: {**provenance, "salt": value}},
+            "_meta": {**meta, mcp.PROVENANCE_META_KEY: {**provenance, member: value}},
         }
-        expect_code(functools.partial(holder, result=relinked), code, what)
-    # The link copied onto another body's content_hash fails step 1 (§8.4).
+        expect_step(functools.partial(holder, result=relinked), step, what)
+    # An absent request_id_hash leaves the request id unchecked, not a mismatch.
+    record = {k: v for k, v in body["metadata"].items() if k != "request_id_hash"}
+    unsigned = {k: v for k, v in body.items() if k not in ("content_hash", "signature")}
+    no_rid = signing_resign_mcp(ctx, {**unsigned, "metadata": record})
     relinked = {
         **returned,
         "_meta": {
             **meta,
-            mcp.PROVENANCE_META_KEY: {**provenance, "content_hash": "sha256:" + "0" * 64},
+            mcp.PROVENANCE_META_KEY: {**provenance, "content_hash": no_rid["content_hash"]},
         },
     }
-    expect_code(lambda: holder(result=relinked), mismatch, "link content_hash")
+    got = holder(b=no_rid, result=relinked)
+    check(not got.request_id_checked, "absent request_id_hash: request id unchecked")
     expect_code(
         lambda: holder(b={**body, "title": body["title"] + "."}), "hash_mismatch", "altered body"
     )
@@ -2565,7 +2596,7 @@ def _spec_dir_executor(fn: Callable[[JsonObj, Path], None]) -> Executor:
     return run_fixture
 
 
-for _fid, _fn in {**CHAIN_EXECUTORS, **RECALL_EXECUTORS}.items():
+for _fid, _fn in {**CHAIN_EXECUTORS, **RECALL_EXECUTORS, **TRUST_EXECUTORS}.items():
     _EXECUTORS[_fid] = _spec_dir_executor(_fn)
 
 

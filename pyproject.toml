@@ -56,6 +56,7 @@ files = [
     "acdp_verifier",
     "run_conformance.py",
     "chain_conformance.py",
+    "trust_conformance.py",
     "interop_check.py",
     "interop_check_cosignature.py",
     "tests",
