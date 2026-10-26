@@ -13,6 +13,7 @@ from .timeutil import is_canonical_ms, parse_rfc3339
 from .validation import CONTENT_HASH_RE
 
 __all__ = [
+    "REVOCATION_TYPES",
     "BoundaryVerdict",
     "RevocationStatement",
     "applies_to",
@@ -20,6 +21,9 @@ __all__ = [
     "classify_against_boundary",
     "validate_revocation_shape",
 ]
+
+# The standard type and the §10 interim custom form, which consumers treat as equivalent.
+REVOCATION_TYPES = frozenset({"key-revocation", "acdp:key-revocation"})
 
 
 @dataclass(frozen=True)
@@ -46,7 +50,7 @@ def validate_revocation_shape(body: Mapping[str, Any]) -> RevocationStatement:
     custom form ``acdp:key-revocation`` (§10).
     """
     body_type = body.get("type")
-    if body_type not in ("key-revocation", "acdp:key-revocation"):
+    if body_type not in REVOCATION_TYPES:
         raise SchemaViolation(f"not a key-revocation context: type={body_type!r}")
     if body.get("visibility") != "public":
         raise SchemaViolation("a key-revocation context MUST be public (§4)")
