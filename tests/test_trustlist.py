@@ -191,3 +191,16 @@ def test_equivocation_outranks_retraction_at_the_top_serial() -> None:
     v = [_version(3), _version(4, retracted=True), _version(4, content_hash="sha256:" + "f" * 64)]
     got = trustlist.select_version(PIN, v, t=T, as_of=False)
     assert (got.status, got.reason) == ("invalid", "equivocation")
+
+
+def test_step5_class_must_be_known() -> None:
+    body = cc.make_body(
+        cc.A,
+        "2026-10-01T00:00:00.000Z",
+        [],
+        cc.KEY_PRODUCER,
+        type_=trustlist.LIST_TYPE,
+        metadata=_metadata(),
+    )
+    with pytest.raises(ValueError, match="class"):
+        trustlist.validate_list_version(body, PIN, issuer_key_revocation="maybe")
