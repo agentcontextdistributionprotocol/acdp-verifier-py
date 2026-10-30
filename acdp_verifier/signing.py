@@ -87,7 +87,13 @@ def _check_ed25519_point(encoding: bytes, what: str) -> None:
         raise InvalidSignature(f"Ed25519 {what} is a small-order point")
 
 
-def verify_ed25519(public_key: bytes, preimage: str, signature: bytes) -> None:
+def _message(preimage: str | bytes) -> bytes:
+    # A str preimage is a hash string signed as ASCII (§5.8); bytes are signed
+    # as given (the RFC-ACDP-0021 §5.1 proof of possession signs JCS bytes).
+    return preimage if isinstance(preimage, bytes) else preimage.encode("ascii")
+
+
+def verify_ed25519(public_key: bytes, preimage: str | bytes, signature: bytes) -> None:
     """Strictly verify an Ed25519 signature over the ASCII bytes of *preimage*.
 
     Applies RFC-ACDP-0001 §5.10: rejects ``s >= L`` and a small-order (or
@@ -102,7 +108,7 @@ def verify_ed25519(public_key: bytes, preimage: str, signature: bytes) -> None:
     _check_ed25519_point(public_key, "public key A")
     _check_ed25519_point(signature[:32], "nonce point R")
     try:
-        Ed25519PublicKey.from_public_bytes(public_key).verify(signature, preimage.encode("ascii"))
+        Ed25519PublicKey.from_public_bytes(public_key).verify(signature, _message(preimage))
     except _CryptoInvalidSignature as exc:
         raise InvalidSignature("Ed25519 signature does not verify") from exc
 
@@ -136,7 +142,9 @@ def p256_public_key_from_sec1(point: bytes) -> ec.EllipticCurvePublicKey:
     return ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), point)
 
 
-def verify_p256(public_key: ec.EllipticCurvePublicKey, preimage: str, signature: bytes) -> None:
+def verify_p256(
+    public_key: ec.EllipticCurvePublicKey, preimage: str | bytes, signature: bytes
+) -> None:
     """Verify an ECDSA-P256 signature in IEEE 1363 ``r||s`` wire form.
 
     A signature whose byte length is not exactly 64 (e.g. a DER blob) is
@@ -151,6 +159,6 @@ def verify_p256(public_key: ec.EllipticCurvePublicKey, preimage: str, signature:
     s = int.from_bytes(signature[_P256_COORD_LEN:], "big")
     try:
         der = encode_dss_signature(r, s)
-        public_key.verify(der, preimage.encode("ascii"), ec.ECDSA(hashes.SHA256()))
+        public_key.verify(der, _message(preimage), ec.ECDSA(hashes.SHA256()))
     except (_CryptoInvalidSignature, ValueError) as exc:
         raise InvalidSignature("ecdsa-p256 signature does not verify") from exc

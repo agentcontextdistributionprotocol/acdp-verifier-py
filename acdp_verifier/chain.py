@@ -28,12 +28,24 @@ from .errors import AcdpError
 from .evidence import EVENT_RECEIPT_TYPE, validate_evidence
 from .fingerprint import fingerprint
 from .hashing import content_hash, derive_lineage_id, producer_content, sha256_prefixed
+from .keyless import (
+    Attestation,
+    identity_listed,
+    is_keyless_key_id,
+    validate_attestation_body,
+)
 from .receipts import receipt_hash, resolve_receipt_key, verify_receipt
 from .revocation import REVOCATION_TYPES, RevocationStatement, validate_revocation_shape
 from .signing import p256_public_key_from_sec1, verify_ed25519, verify_p256
 from .timeutil import is_canonical_ms, parse_rfc3339
 from .translog import LEAF_VERSION, ReceiptState, verify_checkpoint, verify_log_inclusion
-from .validation import CTX_ID_RE, DID_RE, HOSTNAME_RE, ctx_id_authority
+from .validation import (
+    CTX_ID_RE,
+    DID_RE,
+    HOSTNAME_RE,
+    ctx_id_authority,
+    validate_key_attestation_ref,
+)
 
 __all__ = [
     "DEFAULT_LIMITS",
@@ -251,6 +263,10 @@ class _Key:
     current: bool = False  # in assertionMethod (or did:key)
     basis: str | None = None
     evidence_time: str | None = None
+    # RFC-ACDP-0021 §10: a keyless key, attested by the context ``attestation_ctx``.
+    attestation: Attestation | None = None
+    attestation_ctx: str | None = None
+    attester: str | None = None
 
 
 @dataclass
@@ -455,6 +471,7 @@ class _Pass:
         pinned: JsonObj | None,
         as_of: str | None,
         require_attested_events: bool,
+        keyless_attesters: frozenset[str] = frozenset(),
     ) -> None:
         self.bundle = bundle
         self.contexts: Mapping[str, Any] = bundle["contexts"]
@@ -463,6 +480,7 @@ class _Pass:
         self.omitted = {o["ctx_id"]: o["reason"] for o in bundle.get("omitted", [])}
         self.as_of = as_of
         self.require_attested = require_attested_events
+        self.keyless_attesters = keyless_attesters
         pinned = pinned or {}
         self.pinned_snapshots: list[JsonObj] = pinned.get("snapshots", [])
         self.pinned_registries = set(pinned.get("registries", []))
@@ -578,7 +596,127 @@ class _Pass:
         sig = body.get("signature")
         if not isinstance(sig, Mapping):
             return _Key("unresolvable")
+        if is_keyless_key_id(sig.get("key_id")):
+            return self.keyless_key(body, sig)
         return self.resolve_key(str(body.get("agent_id")), sig.get("key_id"), sig.get("algorithm"))
+
+    def keyless_key(self, body: Mapping[str, Any], sig: Mapping[str, Any]) -> _Key:
+        """RFC-ACDP-0021 §10: §8.1 steps 1-3 and 9 against the pass's evidence.
+
+        Steps 4-6 (placement, window, signature) need the node's receipt and
+        run in :meth:`keyless_placed`; steps 7-8 are the ``key_revocation``
+        stage. A missing attestation is snapshot-like evidence (latest
+        ``unresolvable``, as of T ``unknown``); any other failure is
+        ``unresolvable`` in both passes.
+        """
+        missing = _Key("unknown" if self.as_of is not None else "unresolvable")
+        ref = body.get("key_attestation")
+        try:
+            validate_key_attestation_ref(ref)
+        except AcdpError:
+            return _Key("unresolvable")
+        assert isinstance(ref, Mapping)
+        att_ctx = str(ref["ctx_id"])
+        entry = self.contexts.get(att_ctx)
+        if entry is None:
+            return missing
+        att = entry["body"]
+        att_sig = att.get("signature")
+        if not isinstance(att_sig, Mapping) or is_keyless_key_id(att_sig.get("key_id")):
+            return _Key("unresolvable")  # an attestation is signed by a registry DID key
+        att_receipt = self.receipt(att_ctx)
+        if att_receipt.value == "ok" and not self.admits(att_receipt.created_at):
+            return missing  # the attestation was not yet published at T
+        # Step 1: attestation valid.
+        recomputed = content_hash(producer_content(att))
+        try:
+            attestation = validate_attestation_body(att)
+        except AcdpError:
+            return _Key("unresolvable")
+        if recomputed != ref["content_hash"] or recomputed != att.get("content_hash"):
+            return _Key("unresolvable")
+        signer = self.resolve_key(
+            str(att["agent_id"]), att_sig.get("key_id"), att_sig.get("algorithm")
+        )
+        if (
+            signer.status != "resolved"
+            or not signer.current
+            or not _verify_raw(
+                signer.algorithm, signer.public_key, recomputed, att_sig.get("value")
+            )
+            or att_receipt.value != "ok"
+        ):
+            return _Key("unresolvable")
+        attester = str(att["agent_id"])
+        # Step 2: attester accepted (RFC-ACDP-0021 §11).
+        if attester not in self.keyless_attesters:
+            return _Key("unresolvable")
+        # Step 3: bindings.
+        if (
+            body.get("agent_id") != attestation.controller
+            or sig.get("key_id") != attestation.key_id
+            or sig.get("algorithm") != attestation.algorithm
+        ):
+            return _Key("unresolvable")
+        # Step 9 against the chosen snapshot of the controller.
+        selection = self.select_snapshot(attestation.controller)
+        if (
+            selection.snapshot is None
+            or selection.snapshot.document.get("id") != attestation.controller
+        ):
+            return missing
+        return _Key(
+            "resolved",
+            attestation.algorithm,
+            attestation.public_key,
+            attestation.key_fingerprint,
+            current=identity_listed(selection.snapshot.document, attestation.identity),
+            basis="registry",  # the attester's receipt places the signature
+            attestation=attestation,
+            attestation_ctx=att_ctx,
+            attester=attester,
+        )
+
+    def keyless_placed(self, body: Mapping[str, Any], key: _Key, receipt: _Receipt) -> bool:
+        """§8.1 steps 4-6: the attester's receipt places a valid signature in the window."""
+        attestation = key.attestation
+        if attestation is None:
+            return True
+        return (
+            receipt.value == "ok"
+            and receipt.registry_did == key.attester
+            and receipt.key_fingerprint == attestation.key_fingerprint
+            and receipt.created_at is not None
+            and attestation.not_before <= receipt.created_at < attestation.not_after
+            and _verify_raw(
+                key.algorithm,
+                key.public_key,
+                content_hash(producer_content(body)),
+                body["signature"].get("value"),
+            )
+        )
+
+    def withdrawal(self, key: _Key) -> _Revocation | None:
+        """RFC-ACDP-0021 §9.2: an admitted retraction of the attestation is a
+        registry-attested revocation of the attested key with T = ``not_before``."""
+        if key.attestation is None or key.attestation_ctx is None or key.attester is None:
+            return None
+        stage = self.retraction_stage(key.attestation_ctx)
+        if stage["value"] != "retracted":
+            return None
+        return _Revocation(
+            ctx_id=key.attestation_ctx,
+            statement=RevocationStatement(
+                key.attestation.key_fingerprint,
+                key.attestation.not_before,
+                key.attestation.controller,
+            ),
+            agent_id=key.attester,
+            registry_attested=True,
+            origin_registry=str(_did_web_authority_of(key.attester)),
+            evidence_time=stage.get("evidence_time"),
+            basis=stage.get("basis", "registry"),
+        )
 
     # -- registry receipt (§7.5) ---------------------------------------------
 
@@ -823,6 +961,11 @@ class _Pass:
         if key.status != "resolved" or key.fingerprint == statement.revoked_key_fingerprint:
             return None
         receipt = self.receipt(ctx_key)
+        if key.attestation is not None and (
+            not key.attestation.org_wide or not self.keyless_placed(body, key, receipt)
+        ):
+            # RFC-ACDP-0021 §9.3: only an org-wide keyless key speaks for the controller.
+            return None
         if not key.current and receipt.value != "ok":
             return None  # a historical signer needs the RFC-ACDP-0010 §10 receipt
         if not _verify_raw(
@@ -862,6 +1005,9 @@ class _Pass:
         # node (§7.5; step 5 bound it when a key was located).
         fingerprint = key.fingerprint if key.fingerprint is not None else receipt.key_fingerprint
         applicable: list[_Revocation] = []
+        withdrawn = self.withdrawal(key)
+        if withdrawn is not None:
+            applicable.append(withdrawn)
         if fingerprint is not None:
             for rev in self.revocations():
                 if rev.statement.revoked_key_fingerprint != fingerprint:
@@ -1019,6 +1165,8 @@ class _Pass:
         body = entry["body"]
         key = self.body_key(body)
         receipt = self.receipt(ctx_key)
+        if key.attestation is not None and not self.keyless_placed(body, key, receipt):
+            key = _Key("unresolvable")  # RFC-ACDP-0021 §10: both passes
         stages: JsonObj = {}
 
         presence: JsonObj = {"value": "present"}
@@ -1095,6 +1243,13 @@ class _Pass:
             return {"value": "unknown", "reason": _NO_EVIDENCE}
         if key.status == "unresolvable":
             return {"value": "unresolvable"}
+        if key.attestation is not None:
+            # RFC-ACDP-0021 §10: placed by the attester's receipt (keyless_placed).
+            return {
+                "value": "current" if key.current else "historical_receipt_attested",
+                "basis": "registry",
+                "evidence_time": receipt.created_at,
+            }
         if key.current:
             value = "current"
         elif receipt.value == "ok":
@@ -1310,6 +1465,17 @@ def _chain(passes: Iterable[JsonObj], complete: bool) -> str:
     return worst
 
 
+def _attesters(value: Iterable[str]) -> frozenset[str]:
+    """RFC-ACDP-0021 §11 local configuration: the accepted attesting registries' DIDs."""
+    if isinstance(value, str):
+        raise ChainOptionsError("keyless_attesters must be an array of DIDs")
+    out = frozenset(value)
+    for did in out:
+        if not isinstance(did, str) or not DID_RE.match(did):
+            raise ChainOptionsError(f"keyless attester {did!r} is not a DID")
+    return out
+
+
 def verify_chain(
     roots: Sequence[str],
     evidence: Mapping[str, Any],
@@ -1318,13 +1484,16 @@ def verify_chain(
     limits: Mapping[str, Any] | None = None,
     pinned: Mapping[str, Any] | None = None,
     require_attested_events: bool = True,
+    keyless_attesters: Iterable[str] = (),
     clock: Callable[[], float] | None = None,
 ) -> JsonObj:
     """RFC-ACDP-0017 ``verify_chain(roots, evidence, options) -> acdp-chain-verdict/1``.
 
     Raises :class:`ChainOptionsError` for rejected options and
     :class:`evidence.EvidenceRejected` for a bundle failing its schema; in
-    both cases no verdict is emitted. ``clock`` is unused by design: the
+    both cases no verdict is emitted. ``keyless_attesters`` names the
+    registries whose RFC-ACDP-0021 key attestations are accepted (§11); the
+    default accepts none, so a keyless node is ``key: unresolvable``. ``clock`` is unused by design: the
     verifier reads no wall clock (§5.4); it exists only so callers cannot pass
     one by accident through ``**kwargs``.
     """
@@ -1340,6 +1509,7 @@ def verify_chain(
         raise ChainOptionsError("require_attested_events must be a boolean")
     norm_limits = _normalize_limits(limits)
     norm_pinned = normalize_pinned(pinned)
+    attesters = _attesters(keyless_attesters)
     validate_evidence(evidence)
 
     sorted_roots = sorted(set(roots), key=_utf8)
@@ -1347,9 +1517,11 @@ def verify_chain(
     walk = _walk(sorted_roots, contexts, norm_limits)
     complete = not walk.frontier
 
-    latest = _Pass(evidence, norm_pinned, None, require_attested_events)
+    latest = _Pass(evidence, norm_pinned, None, require_attested_events, attesters)
     as_of_pass = (
-        _Pass(evidence, norm_pinned, as_of, require_attested_events) if as_of is not None else None
+        _Pass(evidence, norm_pinned, as_of, require_attested_events, attesters)
+        if as_of is not None
+        else None
     )
 
     nodes: list[JsonObj] = []
@@ -1414,6 +1586,7 @@ def verified_receipt_keys(
     as_of: str | None = None,
     pinned: Mapping[str, Any] | None = None,
     require_attested_events: bool = True,
+    keyless_attesters: Iterable[str] = (),
 ) -> dict[str, tuple[str, str]]:
     """``ctx_id -> (registry_did, signing-key fingerprint)`` for each receipt whose
     ``registry_receipt`` stage is ``ok`` in the pass (*as_of* None: latest).
@@ -1422,7 +1595,13 @@ def verified_receipt_keys(
     need the key that signed the receipt, which the closed verdict does not carry.
     """
     validate_evidence(evidence)
-    run = _Pass(evidence, normalize_pinned(pinned), as_of, require_attested_events)
+    run = _Pass(
+        evidence,
+        normalize_pinned(pinned),
+        as_of,
+        require_attested_events,
+        _attesters(keyless_attesters),
+    )
     out: dict[str, tuple[str, str]] = {}
     for ctx_key in ctx_ids:
         if ctx_key not in evidence["contexts"]:

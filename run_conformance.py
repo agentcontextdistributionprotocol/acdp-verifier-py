@@ -54,6 +54,7 @@ from acdp_verifier.fingerprint import (
 )
 from acdp_verifier.timeutil import parse_rfc3339
 from chain_conformance import CHAIN_EXECUTORS, RECALL_EXECUTORS, ScenarioFailure
+from keyless_conformance import KEYLESS_EXECUTORS
 from trust_conformance import TRUST_EXECUTORS
 
 JsonObj = dict[str, Any]
@@ -83,6 +84,11 @@ _SKIP_FAMILIES: dict[str, str] = {
     "lc": SKIP_REGISTRY,
     "mcp": SKIP_MCP_PROXY,
 }
+SKIP_KEYLESS_REGISTRY = (
+    "out-of-scope: registry profile (acdp-registry-keyless, RFC-ACDP-0021 Draft). "
+    "This verifier is a consumer and mints, admits or supersedes nothing; the §7 "
+    "table is executed in kl-001 vector 5 and the consumer side in kl-001, kl-005..009"
+)
 SKIP_DID_FETCH = (
     "out-of-scope: transport (DID-document fetch/cache/re-fetch; RFC-ACDP-0001 §5.11 "
     "step 3 and 'Caching'). This verifier takes DID documents as input and never fetches; "
@@ -122,6 +128,9 @@ _SKIP_IDS: dict[str, str] = {
     "rec-004": SKIP_REGISTRY,
     "rec-005": SKIP_REGISTRY,
     "rec-008": SKIP_REGISTRY,
+    "kl-002": SKIP_KEYLESS_REGISTRY,
+    "kl-003": SKIP_KEYLESS_REGISTRY,
+    "kl-004": SKIP_KEYLESS_REGISTRY,
 }
 
 REGISTRY_AUTHORITY = "registry.example.com"
@@ -2596,7 +2605,12 @@ def _spec_dir_executor(fn: Callable[[JsonObj, Path], None]) -> Executor:
     return run_fixture
 
 
-for _fid, _fn in {**CHAIN_EXECUTORS, **RECALL_EXECUTORS, **TRUST_EXECUTORS}.items():
+for _fid, _fn in {
+    **CHAIN_EXECUTORS,
+    **RECALL_EXECUTORS,
+    **TRUST_EXECUTORS,
+    **KEYLESS_EXECUTORS,
+}.items():
     _EXECUTORS[_fid] = _spec_dir_executor(_fn)
 
 
