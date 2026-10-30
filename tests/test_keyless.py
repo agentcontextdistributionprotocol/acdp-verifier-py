@@ -353,9 +353,43 @@ def test_verify_keyless_without_attestation_is_invalid() -> None:
         assert (got.status, got.reason) == (keyless.KeylessStatus.REFUSED, "attestation_invalid")
 
 
-def test_chain_rejects_bad_attester_option() -> None:
+def test_chain_pins_keyless_attesters() -> None:
+    from acdp_verifier.chain import normalize_pinned
+
+    reg, other = "did:web:registry.example.com", "did:web:other.example.com"
+    assert normalize_pinned({"keyless_attesters": [reg, other, reg]}) == {
+        "keyless_attesters": [other, reg]
+    }
+    assert normalize_pinned({"keyless_attesters": []}) is None
+    for bad in ("did:web:registry.example.com", ["registry.example.com"]):
+        with pytest.raises(ChainOptionsError):
+            normalize_pinned({"keyless_attesters": bad})
     evidence = {"evidence_version": "acdp-evidence/1", "contexts": {}}
-    with pytest.raises(ChainOptionsError):
-        verify_chain([CTX], evidence, keyless_attesters="did:web:registry.example.com")
-    with pytest.raises(ChainOptionsError):
-        verify_chain([CTX], evidence, keyless_attesters=["registry.example.com"])
+    with pytest.raises(TypeError):
+        verify_chain([CTX], evidence, keyless_attesters=[reg])  # type: ignore[call-arg]
+
+
+def test_misplaced_key_attestation_is_a_mismatch() -> None:
+    body = {
+        "signature": {"key_id": f"{CONTROLLER}#key-1", "algorithm": "ed25519"},
+        "key_attestation": {"ctx_id": CTX, "content_hash": HASH},
+    }
+    got = keyless.verify_keyless(
+        body, registry_receipt=None, attestation=None, did_documents={}, controller_document=None
+    )
+    assert (got.status, got.reason) == (keyless.KeylessStatus.REFUSED, "attestation_mismatch")
+
+
+def test_p256_der_pop_rejected() -> None:
+    from cryptography.hazmat.primitives import hashes
+
+    scalar, jwk, compressed = _p256()
+    preimage = keyless.pop_preimage(
+        CONTROLLER, "did:web:registry.example.com", HASH, fingerprint_p256_compressed(compressed)
+    )
+    der = ec.derive_private_key(scalar, ec.SECP256R1()).sign(
+        jcs.canonicalize_any(preimage), ec.ECDSA(hashes.SHA256())
+    )
+    with pytest.raises(InvalidSignature):
+        keyless.verify_pop("ecdsa-p256", jwk, base64.b64encode(der).decode(), preimage)
+    assert keyless._fingerprint("ecdsa-p256", compressed) == fingerprint_p256_compressed(compressed)

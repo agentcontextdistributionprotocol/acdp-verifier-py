@@ -122,7 +122,7 @@ def run_kl_001(fixture: Mapping[str, Any], spec_dir: Path) -> None:
     check(keyless.jwk_thumbprint(eph["public_key_jwk"]) == eph["jwk_thumbprint"], "thumbprint")
     check(fingerprint_ed25519(eph_pub) == eph["key_fingerprint"], "ephemeral fingerprint")
 
-    v1, v2, v3, v4, v5 = fixture["vectors"]
+    v1, v2, v3, v4, v5, v6 = fixture["vectors"]
     # Vector 1: the attestation body.
     pc1, want1 = v1["producer_content"], v1["expected"]
     check(jcs.canonicalize_any(pc1).decode() == want1["canonical_form"], "1: canonical form")
@@ -184,6 +184,48 @@ def run_kl_001(fixture: Mapping[str, Any], spec_dir: Path) -> None:
         ),
         InvalidSignature,
         "3: pop bound to the registry",
+    )
+    # Vector 6: a verify-only ecdsa-p256 PoP; r||s accepted, DER rejected (§5.1).
+    p256 = fixture["p256_test_keypair"]
+    check(v6["kind"] == "pop_p256", f"6: kind {v6['kind']}")
+    check(keyless.jwk_thumbprint(p256["public_key_jwk"]) == p256["jwk_thumbprint"], "6: jkt")
+    p256_raw = keyless.jwk_public_key("ecdsa-p256", p256["public_key_jwk"])
+    check(keyless._fingerprint("ecdsa-p256", p256_raw) == p256["key_fingerprint"], "6: fp")
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    scalar = int(p256["private_scalar_hex"], 16)
+    compressed = (
+        ec.derive_private_key(scalar, ec.SECP256R1())
+        .public_key()
+        .public_bytes(Encoding.X962, PublicFormat.CompressedPoint)
+    )
+    check(compressed.hex() == p256["public_key_compressed_sec1_hex"], "6: public key")
+    th6 = keyless.token_hash(v6["token"])
+    preimage6 = keyless.pop_preimage(CONTROLLER, REGISTRY_DID, th6, p256["key_fingerprint"])
+    check(preimage6 == v6["pop_preimage"], "6: preimage")
+    check(
+        jcs.canonicalize_any(preimage6).decode() == v6["expected"]["pop_canonical_form"],
+        "6: canonical form",
+    )
+    check(v6["expected"] == {**v6["expected"], "p1363_accepted": True, "der_rejected": True}, "6")
+    keyless.verify_pop("ecdsa-p256", p256["public_key_jwk"], v6["pop_value_base64"], preimage6)
+    _expect_raises(
+        lambda: keyless.verify_pop(
+            "ecdsa-p256", p256["public_key_jwk"], v6["pop_value_der_base64"], preimage6
+        ),
+        InvalidSignature,
+        "6: the DER form is rejected",
+    )
+    _expect_raises(
+        lambda: keyless.verify_pop(
+            "ecdsa-p256",
+            p256["public_key_jwk"],
+            v6["pop_value_base64"],
+            {**preimage6, "controller": "did:web:agents.example.com"},
+        ),
+        InvalidSignature,
+        "6: pop bound to the controller",
     )
     # Vector 4: the §8.2 key-status table.
     check(len(v4["cases"]) == 21, f"4: {len(v4['cases'])} cases, expected 21")
@@ -327,9 +369,12 @@ class World:
         ctx: str,
         *,
         not_before: str = "2026-10-26T09:00:00.000Z",
+        host: str = cc.REGISTRY_HOST,
+        registry_seed: bytes = cc.REGISTRY_SEED,
     ) -> tuple[JsonObj, JsonObj]:
         """Mint another attestation like vector 1's, for another ephemeral key."""
         pc = copy.deepcopy(self.golden["vectors"][0]["producer_content"])
+        pc["agent_id"] = f"did:web:{host}"
         fp = _fp(seed)
         pc["metadata"].update(
             identity=identity,
@@ -341,13 +386,12 @@ class World:
             not_after=not_before.replace("T09:00", "T09:10"),
         )
         att = _retrieved(
-            pc,
-            f"acdp://{cc.REGISTRY_HOST}/{ctx}",
-            not_before,
-            f"{REGISTRY_DID}#receipt-key-1",
-            cc.REGISTRY_SEED,
+            pc, f"acdp://{host}/{ctx}", not_before, f"did:web:{host}#receipt-key-1", registry_seed
         )
-        return att, _receipt(att, _fp(cc.REGISTRY_SEED))
+        receipt = _receipt(
+            att, _fp(registry_seed), registry_did=f"did:web:{host}", seed=registry_seed
+        )
+        return att, receipt
 
     def keyless_body(
         self,
@@ -410,8 +454,10 @@ def _revocation(
     ctx: str = "5e5e5e5e-5e5e-4e5e-8e5e-5e5e5e5e5e5e",
     seed: bytes | None = None,
     attestation: tuple[JsonObj, JsonObj] | None = None,
+    target: str | None = None,
+    registry_seed: bytes = cc.REGISTRY_SEED,
 ) -> keyless.RevocationEvidence:
-    """An RFC-ACDP-0014 revocation of the golden attested key."""
+    """An RFC-ACDP-0014 revocation of ``target`` (default: the golden attested key)."""
     pc: JsonObj = {
         "version": 1,
         "supersedes": None,
@@ -423,7 +469,7 @@ def _revocation(
         "derived_from": [],
         "visibility": "public",
         "metadata": {
-            "revoked_key_fingerprint": world.fingerprint,
+            "revoked_key_fingerprint": target or world.fingerprint,
             "compromised_since": compromised_since,
         },
         "acdp_version": "0.5.0",
@@ -444,12 +490,15 @@ def _revocation(
         assert seed is not None
         assert attestation is not None
         att, att_receipt = attestation
+        attester = str(att["agent_id"])
+        ctx_id = f"acdp://{attester.removeprefix('did:web:')}/{ctx}"
         pc["key_attestation"] = {"ctx_id": att["ctx_id"], "content_hash": att["content_hash"]}
         body = _retrieved(pc, ctx_id, "2026-10-26T09:06:00.000Z", att["metadata"]["key_id"], seed)
+        receipt = _receipt(
+            body, att["metadata"]["key_fingerprint"], registry_did=attester, seed=registry_seed
+        )
         return keyless.RevocationEvidence(
-            body,
-            _receipt(body, att["metadata"]["key_fingerprint"]),
-            keyless.AttestationEvidence(att, att_receipt),
+            body, receipt, keyless.AttestationEvidence(att, att_receipt)
         )
     body = _retrieved(
         pc, ctx_id, "2026-10-27T00:00:00.000Z", f"{CONTROLLER}#key-1", CONTROLLER_SEED
@@ -562,12 +611,165 @@ def run_kl_005(fixture: Mapping[str, Any], spec_dir: Path) -> None:
     blind = keyless.RevocationEvidence(blind.body, blind.registry_receipt, None)
     g3 = w.run(revocations=(blind,))
     check(g3.key_revocation == "unknown" and bool(g3.unknown), f"G3: {g3.key_revocation}")
+    _kl_005_signer_outcomes(w)
     # H: discovery is by agent_id = the controller; a revocation by another DID is a hint.
     stranger = _revocation(w, "2026-10-26T09:00:00.000Z")
     sbody = copy.deepcopy(dict(stranger.body))
     sbody["agent_id"] = "did:web:elsewhere.example.com"
     h = w.run(revocations=(keyless.RevocationEvidence(sbody, None),))
     _status(h, S.CURRENTLY_AUTHORIZED, None, "H")
+
+
+def _kl_005_signer_outcomes(w: World) -> None:
+    """kl-005 I-L: a keyless-signed revocation's signer gets §8.1 steps 1-7 (§9.3)."""
+    since = "2026-10-26T09:00:00.000Z"
+    wide = w.attest(EPH_ORG_SEED, SPIFFE, True, "6c6c6c6c-6c6c-4c6c-8c6c-6c6c6c6c6c6c")
+    narrow = w.attest(EPH2_SEED, OIDC, False, "6d6d6d6d-6d6d-4d6d-8d6d-6d6d6d6d6d6d")
+    foreign = w.attest(
+        EPH_ORG_SEED,
+        SPIFFE,
+        True,
+        "6e6e6e6e-6e6e-4e6e-8e6e-6e6e6e6e6e6e",
+        host=OTHER_HOST,
+        registry_seed=OTHER_SEED,
+    )
+
+    def rev(att: tuple[JsonObj, JsonObj], seed: bytes, **kw: Any) -> keyless.RevocationEvidence:
+        return _revocation(w, since, by="keyless", seed=seed, attestation=att, **kw)
+
+    # I: org-wide signer passes steps 1-7: producer-signed, applied, and the
+    # controller's document is not needed for it (no step 9).
+    i = w.run(revocations=(rev(wide, EPH_ORG_SEED),))
+    _status(i, S.REFUSED, "revoked", "I")
+    check([r.trust_class for r in i.revocations] == ["producer-signed"], f"I: {i.revocations}")
+    # J: not org-wide: a hint.
+    j = w.run(revocations=(rev(narrow, EPH2_SEED),))
+    check((j.key_revocation, len(j.hints)) == ("not-revoked", 1), f"J: {j.key_revocation}")
+    # K: not evaluable: attester not accepted, or attestation unavailable.
+    k1 = w.run(revocations=(rev(foreign, EPH_ORG_SEED, registry_seed=OTHER_SEED),))
+    _status(k1, S.CURRENTLY_AUTHORIZED, None, "K untrusted attester: status")
+    check(k1.key_revocation == "unknown", f"K untrusted attester: {k1.key_revocation}")
+    blind = rev(wide, EPH_ORG_SEED)
+    k2 = w.run(revocations=(keyless.RevocationEvidence(blind.body, blind.registry_receipt, None),))
+    check(k2.key_revocation == "unknown", f"K unavailable: {k2.key_revocation}")
+    # Unknown beats pre-compromise (RFC-ACDP-0014 §7), never not-revoked.
+    k3 = w.run(
+        revocations=(
+            _revocation(w, "2026-10-26T09:07:00.000Z"),
+            keyless.RevocationEvidence(blind.body, blind.registry_receipt, None),
+        )
+    )
+    _status(k3, S.HISTORICALLY_AUTHORIZED_PRE_COMPROMISE, None, "K with pre-compromise")
+    check(k3.key_revocation == "unknown", f"K with pre-compromise: {k3.key_revocation}")
+    # L: definitively invalid signers are ignored.
+    att, att_receipt = wide
+    tampered = copy.deepcopy(att)
+    tampered["title"] = "altered"
+    withdrawn = keyless.AttestationEvidence(att, att_receipt, (_registry_retraction(att),))
+    late = rev(wide, EPH_ORG_SEED)
+    late_receipt = _receipt(
+        late.body, att["metadata"]["key_fingerprint"], created_at="2026-10-26T09:10:00.000Z"
+    )
+    bad_sig = copy.deepcopy(dict(late.body))
+    bad_sig["signature"]["value"] = _b64(sign_ed25519(EPH2_SEED, bad_sig["content_hash"]))
+    for label, candidate in (
+        (
+            "attestation hash",
+            keyless.RevocationEvidence(
+                late.body, late.registry_receipt, keyless.AttestationEvidence(tampered, att_receipt)
+            ),
+        ),
+        (
+            "attestation receipt",
+            keyless.RevocationEvidence(
+                late.body, late.registry_receipt, keyless.AttestationEvidence(att, None)
+            ),
+        ),
+        ("window (step 5)", keyless.RevocationEvidence(late.body, late_receipt, late.attestation)),
+        (
+            "signature (step 6)",
+            keyless.RevocationEvidence(bad_sig, late.registry_receipt, late.attestation),
+        ),
+        (
+            "withdrawn (step 7)",
+            keyless.RevocationEvidence(late.body, late.registry_receipt, withdrawn),
+        ),
+    ):
+        got = w.run(revocations=(candidate,))
+        _status(got, S.CURRENTLY_AUTHORIZED, None, f"L {label}")
+        check(
+            (got.key_revocation, got.revocations, got.unknown) == ("not-revoked", (), ()),
+            f"L {label}: {got.key_revocation} {got.unknown}",
+        )
+    _kl_005_chain(w, wide, narrow, foreign)
+
+
+def _kl_005_chain(
+    w: World,
+    wide: tuple[JsonObj, JsonObj],
+    narrow: tuple[JsonObj, JsonObj],
+    foreign: tuple[JsonObj, JsonObj],
+) -> None:
+    """kl-005 I-L in RFC-ACDP-0017: revoking the DID-document-era key-1 with a keyless key."""
+    key1 = _fp(CONTROLLER_SEED)
+    pc = {k: v for k, v in producer_content(w.body).items() if k != "key_attestation"}
+    body = _retrieved(pc, BODY_CTX, SIGNED_AT, f"{CONTROLLER}#key-1", CONTROLLER_SEED)
+    since = "2026-10-26T09:00:00.000Z"
+
+    def bundle_with(
+        att: tuple[JsonObj, JsonObj], seed: bytes, registry_seed: bytes = cc.REGISTRY_SEED
+    ) -> cc.Bundle:
+        bundle = _chain_bundle(w)
+        bundle.contexts[BODY_CTX] = {"body": body, "registry_receipt": _receipt(body, key1)}
+        del bundle.contexts[w.attestation["ctx_id"]]
+        r = _revocation(
+            w,
+            since,
+            by="keyless",
+            seed=seed,
+            attestation=att,
+            target=key1,
+            registry_seed=registry_seed,
+        )
+        bundle.contexts[str(r.body["ctx_id"])] = {
+            "body": r.body,
+            "registry_receipt": r.registry_receipt,
+        }
+        bundle.contexts[att[0]["ctx_id"]] = {"body": att[0], "registry_receipt": att[1]}
+        if registry_seed != cc.REGISTRY_SEED:
+            bundle.did_documents[OTHER_DID] = [
+                {
+                    "document": _registry_doc(OTHER_DID, OTHER_SEED),
+                    "observed_at": "2026-10-01T00:00:00.000Z",
+                }
+            ]
+        return bundle
+
+    def key_revocation(bundle: cc.Bundle, attesters: list[str]) -> list[str]:
+        v = _chain(bundle, pinned={"keyless_attesters": attesters})
+        return [cc.value(v, BODY_CTX, p, "key_revocation") for p in ("latest", "as_of")]
+
+    pinned = [REGISTRY_DID]
+    got = key_revocation(bundle_with(wide, EPH_ORG_SEED), pinned)
+    check(got == ["revoked", "revoked"], f"chain I: {got}")
+    got = key_revocation(bundle_with(narrow, EPH2_SEED), pinned)
+    check(got == ["not-revoked", "not-revoked"], f"chain J: {got}")
+    got = key_revocation(bundle_with(foreign, EPH_ORG_SEED, OTHER_SEED), pinned)
+    check(got == ["unknown", "unknown"], f"chain K untrusted attester: {got}")
+    got = key_revocation(bundle_with(wide, EPH_ORG_SEED), [])
+    check(got == ["unknown", "unknown"], f"chain K nothing pinned: {got}")
+    absent = bundle_with(wide, EPH_ORG_SEED)
+    del absent.contexts[wide[0]["ctx_id"]]
+    got = key_revocation(absent, pinned)
+    check(got == ["unknown", "unknown"], f"chain K attestation absent: {got}")
+    withdrawn = bundle_with(wide, EPH_ORG_SEED)
+    event = _registry_retraction(wide[0])
+    withdrawn.contexts[wide[0]["ctx_id"]]["lifecycle_events"] = [event]
+    withdrawn.contexts[wide[0]["ctx_id"]]["event_receipts"] = [
+        cc.make_event_receipt(event, 0, "2026-10-26T09:30:01.000Z")
+    ]
+    got = key_revocation(withdrawn, pinned)
+    check(got == ["not-revoked", "not-revoked"], f"chain L withdrawn: {got}")
 
 
 # ---------------------------------------------------------------------------
@@ -590,9 +792,10 @@ def _trust_state(entry: JsonObj) -> trustlist.PinState:
 def _trust_policy(entry: JsonObj, t: str = "2026-10-27T00:00:00.000Z") -> keyless.AttesterPolicy:
     state = _trust_state(entry)
 
-    def trusted(body: Mapping[str, Any], attester: str) -> bool:
-        # §11: evaluated with the attesting registry as the receipting registry.
-        receipt = trustlist.ReceiptInput(attester, _fp(cc.REGISTRY_SEED))
+    def trusted(body: Mapping[str, Any], attester: str, receipt_key: str) -> bool:
+        # §11: R is the attester; the key is the one that signed the attestation's receipt.
+        check(receipt_key == _fp(cc.REGISTRY_SEED), f"kl-006: receipt key {receipt_key}")
+        receipt = trustlist.ReceiptInput(attester, receipt_key)
         return trustlist.evaluate_body(body, [state], t=t, receipt=receipt).outcome == "trusted"
 
     return keyless.AttesterPolicy(trust_evaluation=trusted)
@@ -732,7 +935,7 @@ def _chain(bundle: cc.Bundle, **kw: Any) -> JsonObj:
 
 def run_kl_008(fixture: Mapping[str, Any], spec_dir: Path) -> None:
     w = _world(spec_dir)
-    attesters = {"keyless_attesters": [REGISTRY_DID]}
+    attesters: dict[str, Any] = {"pinned": {"keyless_attesters": [REGISTRY_DID]}}
     # A: the bundle carries the attestation; the snapshot lists the identity.
     a = _chain(_chain_bundle(w), **attesters)
     for pass_ in ("latest", "as_of"):
@@ -765,7 +968,10 @@ def run_kl_008(fixture: Mapping[str, Any], spec_dir: Path) -> None:
         got = (cc.value(d, BODY_CTX, pass_, "key_revocation"), cc.value(d, BODY_CTX, pass_, "key"))
         check(got == ("revoked", "revoked"), f"D {pass_}: {got}")
     # E: without accepting the attester (as a verifier without support): refused, never ok.
-    for label, kw in (("no attesters", {}), ("other attester", {"keyless_attesters": [OTHER_DID]})):
+    for label, kw in (
+        ("no attesters", {}),
+        ("other attester", {"pinned": {"keyless_attesters": [OTHER_DID]}}),
+    ):
         e = _chain(_chain_bundle(w), **kw)
         for pass_ in ("latest", "as_of"):
             got = (cc.value(e, BODY_CTX, pass_, "key"), cc.value(e, BODY_CTX, pass_, "signature"))
@@ -785,6 +991,42 @@ def run_kl_008(fixture: Mapping[str, Any], spec_dir: Path) -> None:
     for pass_ in ("latest", "as_of"):
         got = (cc.value(f, BODY_CTX, pass_, "key"), cc.value(f, BODY_CTX, pass_, "signature"))
         check(got == ("unresolvable", "unresolvable"), f"window {pass_}: {got}")
+    # Step 6 is the signature stage: signature invalid, the key as located.
+    forged = copy.deepcopy(w.body)
+    forged["signature"]["value"] = _b64(sign_ed25519(EPH2_SEED, forged["content_hash"]))
+    bundle = _chain_bundle(w)
+    bundle.contexts[BODY_CTX] = {"body": forged, "registry_receipt": w.receipt}
+    g = _chain(bundle, **attesters)
+    for pass_ in ("latest", "as_of"):
+        got = (cc.value(g, BODY_CTX, pass_, "key"), cc.value(g, BODY_CTX, pass_, "signature"))
+        check(got == ("current", "invalid"), f"step 6 {pass_}: {got}")
+    # The accepted attesters are pinned options: options_digest covers them,
+    # normalized (sorted, deduplicated, omitted when empty).
+    digests = {
+        label: _chain(_chain_bundle(w), pinned=p)["options_digest"]
+        for label, p in (
+            ("none", None),
+            ("empty", {"keyless_attesters": []}),
+            ("one", {"keyless_attesters": [REGISTRY_DID]}),
+            ("dup", {"keyless_attesters": [REGISTRY_DID, REGISTRY_DID]}),
+            ("two", {"keyless_attesters": [REGISTRY_DID, OTHER_DID]}),
+            ("two reversed", {"keyless_attesters": [OTHER_DID, REGISTRY_DID]}),
+        )
+    }
+    check(digests["none"] is None and digests["empty"] is None, f"digest empty: {digests}")
+    check(digests["one"] == digests["dup"] and digests["one"] is not None, "digest dedup")
+    check(digests["two"] == digests["two reversed"] != digests["one"], "digest sorted")
+    # §6.2/§12: key_attestation on a body that is not keyless-signed fails closed.
+    pc = producer_content(w.body)
+    misplaced = _retrieved(pc, BODY_CTX, SIGNED_AT, f"{CONTROLLER}#key-1", CONTROLLER_SEED)
+    bundle = _chain_bundle(w)
+    bundle.contexts[BODY_CTX] = {
+        "body": misplaced,
+        "registry_receipt": _receipt(misplaced, _fp(CONTROLLER_SEED)),
+    }
+    h = _chain(bundle, **attesters)
+    for pass_ in ("latest", "as_of"):
+        check(cc.node(h, BODY_CTX)[pass_]["verdict"] == "refused", f"misplaced {pass_}")
 
 
 # ---------------------------------------------------------------------------
