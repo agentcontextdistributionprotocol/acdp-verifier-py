@@ -719,7 +719,10 @@ def _check(
     receipt_key_fingerprint = ""
     if evidence is None or evidence.body.get("ctx_id") != ref["ctx_id"]:
         return _Checked(failed, None, None, unavailable=True)
+    # §9.3: evidence that cannot be obtained is unavailable, not invalid.
     if str(evidence.body.get("agent_id")) not in did_documents:
+        return _Checked(failed, None, None, unavailable=True)
+    if evidence.registry_receipt is None:
         return _Checked(failed, None, None, unavailable=True)
     att = evidence.body
     try:
@@ -730,8 +733,6 @@ def _check(
             raise AttestationInvalid("attestation bytes do not hash to key_attestation")
         attester = str(att["agent_id"])
         signer = verify_context_body(att, did_documents=did_documents)
-        if evidence.registry_receipt is None:
-            raise AttestationInvalid("attestation has no registry_receipt")
         key = _registry_key(did_documents, evidence.registry_receipt)
         if key is None:
             raise AttestationInvalid("attestation receipt key does not resolve")
