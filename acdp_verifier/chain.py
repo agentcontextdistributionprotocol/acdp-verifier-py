@@ -661,9 +661,11 @@ class _Pass:
         signer = self.resolve_key(
             str(att["agent_id"]), att_sig.get("key_id"), att_sig.get("algorithm")
         )
+        # §8.1 step 1, attester key rotation: a key retired from assertionMethod
+        # but kept in verificationMethod verifies through the attestation's own
+        # receipt (RFC-ACDP-0010 §10), whose step 5 binds it to this key.
         if (
             signer.status != "resolved"
-            or not signer.current
             or not _verify_raw(
                 signer.algorithm, signer.public_key, recomputed, att_sig.get("value")
             )
