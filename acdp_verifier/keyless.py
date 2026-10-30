@@ -30,14 +30,14 @@ import binascii
 import hashlib
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any
 
 from . import jcs
 from .didweb import KEYLESS_FRAGMENT_PREFIX, resolve_verification_method
 from .errors import AcdpError, InvalidSignature, SchemaViolation
-from .fingerprint import fingerprint_ed25519, fingerprint_p256_xy
+from .fingerprint import fingerprint_ed25519, fingerprint_p256_compressed, fingerprint_p256_xy
 from .hashing import content_hash, producer_content, sha256_prefixed
 from .receipts import verify_receipt
 from .revocation import (
@@ -270,6 +270,8 @@ def jwk_public_key(algorithm: str, jwk: Any) -> bytes:
 def _fingerprint(algorithm: str, raw: bytes) -> str:
     """RFC-ACDP-0010 §6 over the raw Ed25519 key or the compressed P-256 point."""
     if algorithm == "ecdsa-p256":
+        if len(raw) == 33:  # a DID document may carry the compressed point
+            return fingerprint_p256_compressed(raw)
         return fingerprint_p256_xy(raw[1:33], raw[33:])
     return fingerprint_ed25519(raw)
 
@@ -543,7 +545,9 @@ class RevocationEvidence:
 
 
 # (keyless body, attesting registry DID) -> True iff RFC-ACDP-0020 §6.2 says ``trusted``.
-TrustEvaluation = Callable[[Mapping[str, Any], str], bool]
+# §11 trust-list inputs: (keyless-signed body, R = the attester's DID, the
+# fingerprint of the registry key that signed the attestation's receipt).
+TrustEvaluation = Callable[[Mapping[str, Any], str, str], bool]
 
 
 @dataclass(frozen=True)
@@ -553,10 +557,12 @@ class AttesterPolicy:
     accepted: frozenset[str] = frozenset()
     trust_evaluation: TrustEvaluation | None = None
 
-    def accepts(self, body: Mapping[str, Any], attester: str) -> bool:
+    def accepts(self, body: Mapping[str, Any], attester: str, receipt_key_fingerprint: str) -> bool:
         if attester in self.accepted:
             return True
-        return self.trust_evaluation is not None and self.trust_evaluation(body, attester)
+        return self.trust_evaluation is not None and self.trust_evaluation(
+            body, attester, receipt_key_fingerprint
+        )
 
 
 @dataclass(frozen=True)
@@ -685,6 +691,9 @@ class _Checked:
     facts: Facts
     attestation: Attestation | None
     attester: str | None
+    # §9.3: step 1 failed for want of evidence (the attestation, or its
+    # registry's DID document, is unavailable), not on a definite check.
+    unavailable: bool = False
 
 
 def _check(
@@ -707,37 +716,42 @@ def _check(
     # Step 1: attestation valid.
     attestation: Attestation | None = None
     attester: str | None = None
-    if evidence is not None and evidence.body.get("ctx_id") == ref["ctx_id"]:
-        att = evidence.body
-        try:
-            validate_body(att)
-            attestation = validate_attestation_body(att)
-            recomputed = content_hash(producer_content(att))
-            if recomputed != ref["content_hash"]:
-                raise AttestationInvalid("attestation bytes do not hash to key_attestation")
-            attester = str(att["agent_id"])
-            signer = verify_context_body(att, did_documents=did_documents)
-            if evidence.registry_receipt is None:
-                raise AttestationInvalid("attestation has no registry_receipt")
-            key = _registry_key(did_documents, evidence.registry_receipt)
-            if key is None:
-                raise AttestationInvalid("attestation receipt key does not resolve")
-            verify_receipt(
-                evidence.registry_receipt,
-                registry_public_key=key[1],
-                serving_authority=ctx_id_authority(str(att["ctx_id"])),
-                expected_ctx_id=str(att["ctx_id"]),
-                body=att,
-                recomputed_content_hash=recomputed,
-                resolved_producer_fingerprint=signer.key_fingerprint,
-            )
-        except AcdpError:
-            attestation = None
+    receipt_key_fingerprint = ""
+    if evidence is None or evidence.body.get("ctx_id") != ref["ctx_id"]:
+        return _Checked(failed, None, None, unavailable=True)
+    if str(evidence.body.get("agent_id")) not in did_documents:
+        return _Checked(failed, None, None, unavailable=True)
+    att = evidence.body
+    try:
+        validate_body(att)
+        attestation = validate_attestation_body(att)
+        recomputed = content_hash(producer_content(att))
+        if recomputed != ref["content_hash"]:
+            raise AttestationInvalid("attestation bytes do not hash to key_attestation")
+        attester = str(att["agent_id"])
+        signer = verify_context_body(att, did_documents=did_documents)
+        if evidence.registry_receipt is None:
+            raise AttestationInvalid("attestation has no registry_receipt")
+        key = _registry_key(did_documents, evidence.registry_receipt)
+        if key is None:
+            raise AttestationInvalid("attestation receipt key does not resolve")
+        receipt_key_fingerprint = _fingerprint(key[0], key[1])
+        verify_receipt(
+            evidence.registry_receipt,
+            registry_public_key=key[1],
+            serving_authority=ctx_id_authority(str(att["ctx_id"])),
+            expected_ctx_id=str(att["ctx_id"]),
+            body=att,
+            recomputed_content_hash=recomputed,
+            resolved_producer_fingerprint=signer.key_fingerprint,
+        )
+    except AcdpError:
+        attestation = None
     if attestation is None or attester is None:
         return _Checked(failed, None, None)
 
     # Step 2: attester accepted (§11).
-    accepted = policy.accepts(body, attester)
+    accepted = policy.accepts(body, attester, receipt_key_fingerprint)
     # Step 3: bindings.
     bindings_ok = (
         body.get("agent_id") == attestation.controller
@@ -850,23 +864,19 @@ def _classify_candidate(
     if is_keyless_key_id(sig.get("key_id")):
         if sig.get("key_id") == keyless_key_id(controller, key_fingerprint):
             return _Candidate("ignored", ctx_id)  # self-signed (RFC-ACDP-0014 §5 step 2)
-        if candidate.attestation is None:
-            return _Candidate("unknown", ctx_id)  # its org_wide cannot be read
-        signer = verify_keyless(
-            rev,
-            registry_receipt=candidate.registry_receipt,
-            attestation=candidate.attestation,
-            did_documents=did_documents,
-            controller_document=controller_document,
-            policy=policy,
+        # §9.3: the signer gets §8.1 steps 1-7; step 8 (no recursion into its
+        # own revocations) and step 9 (both outcomes authorize) are not run.
+        signer = _check(
+            rev, candidate.registry_receipt, candidate.attestation, did_documents, policy
         )
-        if signer.status is KeylessStatus.REFUSED:
-            if signer.reason == "controller_unreachable":
-                return _Candidate("unknown", ctx_id)
-            return _Candidate("ignored", ctx_id)
-        assert signer.attestation is not None
+        if signer.attestation is None:
+            return _Candidate("unknown" if signer.unavailable else "ignored", ctx_id)
+        status, reason = decide(replace(signer.facts, identity_listed_now=True))
+        if status is KeylessStatus.REFUSED:
+            # Not evaluable when the attester is not accepted; otherwise invalid.
+            return _Candidate("unknown" if reason == "untrusted_attester" else "ignored", ctx_id)
         if not signer.attestation.org_wide:
-            return _Candidate("hint", ctx_id)  # §9.3: does not speak for the controller
+            return _Candidate("hint", ctx_id)  # does not speak for the controller
         return _Candidate("applied", ctx_id, "producer-signed", statement)
     # Signed by a key in the controller's DID document.
     if controller_document is None:
@@ -926,6 +936,9 @@ def verify_keyless(
     policy = policy or AttesterPolicy()
     sig = body.get("signature")
     if not isinstance(sig, Mapping) or not is_keyless_key_id(sig.get("key_id")):
+        if "key_attestation" in body:
+            # §6.2/§12: key_attestation on a body that is not keyless-signed.
+            return KeylessResult(KeylessStatus.REFUSED, "attestation_mismatch")
         raise ValueError("verify_keyless needs a keyless-signed body (§6.1)")
     checked = _check(body, registry_receipt, attestation, did_documents, policy)
     facts = checked.facts
