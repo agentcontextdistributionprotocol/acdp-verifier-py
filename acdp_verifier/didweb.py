@@ -18,6 +18,7 @@ from .didkey import MULTICODEC_ED25519, MULTICODEC_P256
 from .errors import InvalidSignature, KeyNotAuthorized, KeyResolutionFailed
 
 __all__ = [
+    "KEYLESS_FRAGMENT_PREFIX",
     "Authorization",
     "ResolvedVerificationMethod",
     "did_web_authority",
@@ -26,6 +27,9 @@ __all__ = [
 ]
 
 _B64URL_PAD = {0: "", 2: "==", 3: "="}
+
+# RFC-ACDP-0021 §4.2 / §6.1: the fragment prefix reserved for keyless key ids.
+KEYLESS_FRAGMENT_PREFIX = "acdp-kl-"
 
 
 class Authorization(Enum):
@@ -149,6 +153,14 @@ def resolve_verification_method(
     _, sep, fragment = key_id.partition("#")
     if not sep or not fragment:
         raise KeyResolutionFailed("signature.key_id must carry a fragment")
+    # RFC-ACDP-0021 §4.2: the prefix is reserved for keyless key ids, which
+    # resolve only through RFC-ACDP-0021 §8 (keyless.py). A document that lists
+    # such a method is refused for it, never resolved.
+    if fragment.startswith(KEYLESS_FRAGMENT_PREFIX):
+        raise KeyResolutionFailed(
+            f"#{fragment} is a keyless key id (RFC-ACDP-0021 §4.2); it never resolves "
+            "against a DID document"
+        )
 
     methods = did_document.get("verificationMethod")
     if not isinstance(methods, list):

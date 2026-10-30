@@ -379,6 +379,7 @@ _PUBLISH_ALLOWED = frozenset(
         "lineage_id",
         "acdp_version",
         "anchors",
+        "key_attestation",
     )
 )
 
@@ -510,6 +511,20 @@ def _validate_producer_fields(body: Mapping[str, Any], where: str) -> None:
 
     if "anchors" in body:
         validate_anchors(body["anchors"])
+    if "key_attestation" in body:
+        validate_key_attestation_ref(body["key_attestation"], f"{where}.key_attestation")
+
+
+def validate_key_attestation_ref(value: Any, where: str = "key_attestation") -> None:
+    """The closed ``key_attestation`` object (RFC-ACDP-0021 §6.2): ``{ctx_id, content_hash}``."""
+    if not isinstance(value, Mapping) or set(value.keys()) != {"ctx_id", "content_hash"}:
+        raise _fail(f"{where} must be exactly {{ctx_id, content_hash}}")
+    if not isinstance(value["ctx_id"], str) or not CTX_ID_RE.match(value["ctx_id"]):
+        raise _fail(f"{where}.ctx_id is not a ctx_id")
+    if not isinstance(value["content_hash"], str) or not CONTENT_HASH_RE.match(
+        value["content_hash"]
+    ):
+        raise _fail(f"{where}.content_hash is malformed")
 
 
 def validate_publish_request(request: Any) -> None:
