@@ -38,6 +38,7 @@ OTHER_SEED = b"\x22" * 32
 CONTROLLER_SEED = b"\x33" * 32
 EPH2_SEED = b"\x77" * 32  # a second ephemeral key, same oidc identity
 EPH_ORG_SEED = b"\x88" * 32  # an ephemeral key for the org-wide spiffe identity
+SUCCESSOR_SEED = b"\x99" * 32  # a registry's successor key after rotation (kl-005 M, N)
 OIDC = {
     "type": "oidc",
     "issuer": "https://token.actions.githubusercontent.com",
@@ -254,6 +255,14 @@ def run_kl_001(fixture: Mapping[str, Any], spec_dir: Path) -> None:
 
 def _registry_doc(did: str = REGISTRY_DID, seed: bytes = cc.REGISTRY_SEED) -> JsonObj:
     return cc.did_document(did, {"receipt-key-1": seed}, ["receipt-key-1"])
+
+
+def _rotated_doc(
+    did: str = REGISTRY_DID, seed: bytes = cc.REGISTRY_SEED, *, retained: bool = True
+) -> JsonObj:
+    """The registry after rotating to receipt-key-2: key-1 retired (M) or removed (N)."""
+    keys = {"receipt-key-1": seed} if retained else {}
+    return cc.did_document(did, {**keys, "receipt-key-2": SUCCESSOR_SEED}, ["receipt-key-2"])
 
 
 def _controller_doc(*identities: JsonObj, extra_vms: list[JsonObj] | None = None) -> JsonObj:
@@ -716,6 +725,52 @@ def _kl_005_signer_outcomes(w: World) -> None:
             f"L {label}: {got.key_revocation} {got.unknown}",
         )
     _kl_005_chain(w, wide, narrow, foreign)
+    _kl_005_rotation(w, wide, foreign, rev)
+
+
+def _kl_005_rotation(
+    w: World,
+    wide: tuple[JsonObj, JsonObj],
+    foreign: tuple[JsonObj, JsonObj],
+    rev: Callable[..., keyless.RevocationEvidence],
+) -> None:
+    """kl-005 M, N: the attester's signing key rotated out of assertionMethod (§8.1 step 1)."""
+    for retained, label in ((True, "M"), (False, "N")):
+        docs = {REGISTRY_DID: _rotated_doc(retained=retained)}
+        a = w.run(did_documents=docs)
+        b = w.run(did_documents=docs, controller_document=_controller_doc(LISTED[1]))
+        c = w.run(did_documents=docs, revocations=(_revocation(w, "2026-10-26T09:06:00.000Z"),))
+        if retained:
+            # Step 1 passes via RFC-ACDP-0010 §10; steps 8-9 decide as usual.
+            _status(a, S.CURRENTLY_AUTHORIZED, None, "M")
+            _status(b, S.HISTORICALLY_AUTHORIZED, None, "M identity removed")
+            _status(c, S.HISTORICALLY_AUTHORIZED_PRE_COMPROMISE, None, "M pre-compromise")
+        else:
+            for got, what in ((a, "N"), (b, "N identity removed"), (c, "N pre-compromise")):
+                _status(got, S.REFUSED, "attestation_invalid", what)
+        # The same step 1 for a keyless revocation signer (§9.3): only the
+        # foreign attester rotates, so the body under test is unaffected.
+        signer = w.run(
+            did_documents={
+                REGISTRY_DID: _registry_doc(),
+                OTHER_DID: _rotated_doc(OTHER_DID, OTHER_SEED, retained=retained),
+            },
+            policy=keyless.AttesterPolicy(frozenset({REGISTRY_DID, OTHER_DID})),
+            revocations=(rev(foreign, EPH_ORG_SEED, registry_seed=OTHER_SEED),),
+        )
+        want = ("revoked", 1) if retained else ("not-revoked", 0)
+        outcome = (signer.key_revocation, len(signer.revocations))
+        check(outcome == want and not signer.unknown, f"{label} signer: {outcome} {signer.unknown}")
+        # And in RFC-ACDP-0017: the key stage over a rotated attester snapshot.
+        bundle = _chain_bundle(w)
+        bundle.did_documents[REGISTRY_DID] = [
+            {"document": _rotated_doc(retained=retained), "observed_at": "2026-10-01T00:00:00.000Z"}
+        ]
+        v = _chain(bundle, pinned={"keyless_attesters": [REGISTRY_DID]})
+        want_key = "current" if retained else "unresolvable"
+        for pass_ in ("latest", "as_of"):
+            key = cc.value(v, BODY_CTX, pass_, "key")
+            check(key == want_key, f"chain {label} {pass_}: key {key}")
 
 
 def _kl_005_chain(
@@ -766,6 +821,19 @@ def _kl_005_chain(
     pinned = [REGISTRY_DID]
     got = key_revocation(bundle_with(wide, EPH_ORG_SEED), pinned)
     check(got == ["revoked", "revoked"], f"chain I: {got}")
+    # kl-005 M: the signer's attester has since rotated its key; still applied.
+    # The target's own receipt is re-issued under the successor key, since a
+    # retired receipt key cannot place it (RFC-ACDP-0017 §7.9, RFC-ACDP-0014 §7-§8).
+    rotated = bundle_with(wide, EPH_ORG_SEED)
+    rotated.did_documents[REGISTRY_DID] = [
+        {"document": _rotated_doc(), "observed_at": "2026-10-01T00:00:00.000Z"}
+    ]
+    successor = _receipt(body, key1)
+    successor["signature"]["key_id"] = f"{REGISTRY_DID}#receipt-key-2"
+    successor["signature"]["value"] = _b64(sign_ed25519(SUCCESSOR_SEED, receipt_hash(successor)))
+    rotated.contexts[BODY_CTX]["registry_receipt"] = successor
+    got = key_revocation(rotated, pinned)
+    check(got == ["revoked", "revoked"], f"chain M signer: {got}")
     got = key_revocation(bundle_with(narrow, EPH2_SEED), pinned)
     check(got == ["not-revoked", "not-revoked"], f"chain J: {got}")
     got = key_revocation(bundle_with(foreign, EPH_ORG_SEED, OTHER_SEED), pinned)

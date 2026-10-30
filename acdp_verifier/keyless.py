@@ -732,7 +732,10 @@ def _check(
         if recomputed != ref["content_hash"]:
             raise AttestationInvalid("attestation bytes do not hash to key_attestation")
         attester = str(att["agent_id"])
-        signer = verify_context_body(att, did_documents=did_documents)
+        # §8.1 step 1, attester key rotation: the RFC-ACDP-0010 §10 historical
+        # arm, made sound by the receipt's step-5 binding to this key below.
+        # A key gone from verificationMethod still fails to resolve.
+        signer = verify_context_body(att, did_documents=did_documents, allow_historical=True)
         key = _registry_key(did_documents, evidence.registry_receipt)
         if key is None:
             raise AttestationInvalid("attestation receipt key does not resolve")
