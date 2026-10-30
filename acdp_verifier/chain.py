@@ -498,9 +498,9 @@ class _Pass:
         self.pinned_vantages = set(pinned.get("vantages", []))
         self._receipts: dict[str, _Receipt] = {}
         self._revocations: list[_Revocation] | None = None
-        # RFC-ACDP-0021 §9.3: (controller, revoked fingerprint) of candidate
-        # revocations whose keyless signer cannot be evaluated.
-        self._unevaluable: set[tuple[str, str]] = set()
+        # RFC-ACDP-0021 §9.3: (controller, revoked fingerprint) -> ctx_ids of
+        # candidate revocations whose keyless signer cannot be evaluated.
+        self._unevaluable: dict[tuple[str, str], list[str]] = {}
 
     # -- evidence admission ------------------------------------------------
 
@@ -647,6 +647,9 @@ class _Pass:
         att_receipt = self.receipt(att_ctx)
         if att_receipt.value == "ok" and not self.admits(att_receipt.created_at):
             return missing  # the attestation was not yet published at T
+        if att_receipt.value == "absent" or not self.did_documents.get(str(att.get("agent_id"))):
+            # §9.3: the receipt or the attester's DID document cannot be obtained.
+            return _Key("unresolvable", unevaluable=True)
         # Step 1: attestation valid.
         recomputed = content_hash(producer_content(att))
         try:
@@ -990,9 +993,9 @@ class _Pass:
                         or self.admits(receipt.created_at)
                     )
                 ):
-                    self._unevaluable.add(
-                        (str(body.get("agent_id")), statement.revoked_key_fingerprint)
-                    )
+                    self._unevaluable.setdefault(
+                        (str(body.get("agent_id")), statement.revoked_key_fingerprint), []
+                    ).append(ctx_key)
                 return None
             assert key.attestation is not None
             if (
@@ -1084,12 +1087,21 @@ class _Pass:
             }
             if fixing.evidence_time is not None:
                 stage["evidence_time"] = fixing.evidence_time
-            if value == "pre-compromise" and (str(agent_id), fingerprint) in self._unevaluable:
-                return {"value": "unknown"}  # RFC-ACDP-0014 §7: unknown beats pre-compromise
+            if value == "pre-compromise" and (
+                unevaluable := self._unevaluable_stage(agent_id, fingerprint)
+            ):
+                return unevaluable  # RFC-ACDP-0014 §7: unknown beats pre-compromise
             return stage
-        if fingerprint is not None and (str(agent_id), fingerprint) in self._unevaluable:
-            return {"value": "unknown"}  # RFC-ACDP-0021 §9.3: never not-revoked
+        if unevaluable := self._unevaluable_stage(agent_id, fingerprint):
+            return unevaluable  # RFC-ACDP-0021 §9.3: never not-revoked
         return self._discovery_stage(str(agent_id))
+
+    def _unevaluable_stage(self, agent_id: Any, fingerprint: str | None) -> JsonObj | None:
+        """RFC-ACDP-0021 §10: an unevaluable keyless-signed revocation; no basis, no time."""
+        ctx_ids = self._unevaluable.get((str(agent_id), fingerprint or ""))
+        if not ctx_ids:
+            return None
+        return {"value": "unknown", "revocation_ctx_id": min(ctx_ids, key=_utf8)}
 
     def _discovery_stage(self, producer: str) -> JsonObj:
         """No applied revocation: the producer's discovery outcome (§7.9, RFC-ACDP-0014 §7 precedence)."""

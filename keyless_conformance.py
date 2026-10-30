@@ -652,6 +652,18 @@ def _kl_005_signer_outcomes(w: World) -> None:
     blind = rev(wide, EPH_ORG_SEED)
     k2 = w.run(revocations=(keyless.RevocationEvidence(blind.body, blind.registry_receipt, None),))
     check(k2.key_revocation == "unknown", f"K unavailable: {k2.key_revocation}")
+    # §9.3: a missing attestation receipt, or the attester's DID document, is unavailable.
+    no_receipt = keyless.RevocationEvidence(
+        blind.body, blind.registry_receipt, keyless.AttestationEvidence(wide[0], None)
+    )
+    k4 = w.run(revocations=(no_receipt,))
+    check(k4.key_revocation == "unknown", f"K no attestation receipt: {k4.key_revocation}")
+    k5 = w.run(
+        revocations=(rev(foreign, EPH_ORG_SEED, registry_seed=OTHER_SEED),),
+        did_documents={REGISTRY_DID: _registry_doc()},
+        policy=keyless.AttesterPolicy(frozenset({REGISTRY_DID, OTHER_DID})),
+    )
+    check(k5.key_revocation == "unknown", f"K no attester document: {k5.key_revocation}")
     # Unknown beats pre-compromise (RFC-ACDP-0014 §7), never not-revoked.
     k3 = w.run(
         revocations=(
@@ -680,9 +692,11 @@ def _kl_005_signer_outcomes(w: World) -> None:
             ),
         ),
         (
-            "attestation receipt",
+            "attestation receipt fails",
             keyless.RevocationEvidence(
-                late.body, late.registry_receipt, keyless.AttestationEvidence(att, None)
+                late.body,
+                late.registry_receipt,
+                keyless.AttestationEvidence(att, {**att_receipt, "created_at": SIGNED_AT}),
             ),
         ),
         ("window (step 5)", keyless.RevocationEvidence(late.body, late_receipt, late.attestation)),
@@ -1000,6 +1014,7 @@ def run_kl_008(fixture: Mapping[str, Any], spec_dir: Path) -> None:
     for pass_ in ("latest", "as_of"):
         got = (cc.value(g, BODY_CTX, pass_, "key"), cc.value(g, BODY_CTX, pass_, "signature"))
         check(got == ("current", "invalid"), f"step 6 {pass_}: {got}")
+    _kl_008_f(w, attesters)
     # The accepted attesters are pinned options: options_digest covers them,
     # normalized (sorted, deduplicated, omitted when empty).
     digests = {
@@ -1027,6 +1042,68 @@ def run_kl_008(fixture: Mapping[str, Any], spec_dir: Path) -> None:
     h = _chain(bundle, **attesters)
     for pass_ in ("latest", "as_of"):
         check(cc.node(h, BODY_CTX)[pass_]["verdict"] == "refused", f"misplaced {pass_}")
+
+
+def _kl_008_f(w: World, attesters: dict[str, Any]) -> None:
+    """F: an unevaluable keyless-signed revocation of the node's attested key (§10)."""
+    since = "2026-10-26T09:00:00.000Z"
+
+    def foreign(ctx: str) -> keyless.RevocationEvidence:
+        att = w.attest(EPH_ORG_SEED, SPIFFE, True, ctx, host=OTHER_HOST, registry_seed=OTHER_SEED)
+        return _revocation(
+            w,
+            since,
+            by="keyless",
+            seed=EPH_ORG_SEED,
+            attestation=att,
+            registry_seed=OTHER_SEED,
+            ctx=ctx.replace("7", "8"),
+        )
+
+    def bundle_with(*revs: keyless.RevocationEvidence) -> cc.Bundle:
+        bundle = _chain_bundle(w)
+        bundle.did_documents[OTHER_DID] = [
+            {
+                "document": _registry_doc(OTHER_DID, OTHER_SEED),
+                "observed_at": "2026-10-01T00:00:00.000Z",
+            }
+        ]
+        for r in revs:
+            bundle.contexts[str(r.body["ctx_id"])] = {
+                "body": r.body,
+                "registry_receipt": r.registry_receipt,
+            }
+            assert r.attestation is not None
+            bundle.contexts[str(r.attestation.body["ctx_id"])] = {
+                "body": r.attestation.body,
+                "registry_receipt": r.attestation.registry_receipt,
+            }
+        return bundle
+
+    r1 = foreign("7f7f7f7f-7f7f-4f7f-8f7f-7f7f7f7f7f72")
+    r2 = foreign("7f7f7f7f-7f7f-4f7f-8f7f-7f7f7f7f7f71")
+    lowest = min((str(r1.body["ctx_id"]), str(r2.body["ctx_id"])), key=lambda c: c.encode())
+    for label, bundle, want in (
+        ("one", bundle_with(r1), str(r1.body["ctx_id"])),
+        ("two: lowest by UTF-8 bytes", bundle_with(r1, r2), lowest),
+    ):
+        v = _chain(bundle, **attesters)
+        for pass_ in ("latest", "as_of"):
+            got = cc.stage(v, BODY_CTX, pass_, "key_revocation")
+            check(
+                got == {"value": "unknown", "revocation_ctx_id": want}, f"F {label} {pass_}: {got}"
+            )
+            check(cc.node(v, BODY_CTX)[pass_]["verdict"] == "unknown", f"F {label} {pass_} verdict")
+    # An applying revocation wins over it (revoked).
+    applying = _revocation(w, "2026-10-26T09:04:00.000Z")
+    bundle = bundle_with(r1)
+    bundle.contexts[str(applying.body["ctx_id"])] = {
+        "body": applying.body,
+        "registry_receipt": applying.registry_receipt,
+    }
+    v = _chain(bundle, **attesters)
+    got = cc.value(v, BODY_CTX, "latest", "key_revocation")
+    check(got == "revoked", f"F revoked wins: {got}")
 
 
 # ---------------------------------------------------------------------------
