@@ -11,6 +11,7 @@ import chain_conformance as cc
 from acdp_verifier.recall import (
     HintRejected,
     RecallConsumer,
+    check_envelope,
     hint_signature,
     verify_change,
     verify_hint,
@@ -157,22 +158,25 @@ def test_superseded_rejections() -> None:
         "recorded_at": cc.T,
         "registry_receipt": evidence["contexts"][cc.B]["registry_receipt"],
     }
-    # B's receipt names B, not superseded_by (§7 envelope consistency).
-    assert "envelope" in str(_verify(sup, evidence).reason)
     b_receipt = evidence["contexts"][cc.B]["registry_receipt"]
+    # §7 envelope consistency, in rec-009's check_order.
+    assert _verify(sup, evidence).reason == "recorded_at_mismatch"
+    sup["recorded_at"] = b_receipt["created_at"]
+    assert _verify(sup, evidence).reason == "ctx_id_mismatch"  # B's receipt names B
     sup["registry_receipt"] = {**b_receipt, "ctx_id": cc.D}
     assert "not retrieved" in str(_verify(sup, evidence).reason)
-    assert "envelope" in str(_verify({**sup, "superseded_by": cc.B}, evidence).reason)
+    self_sup = {**sup, "superseded_by": cc.B, "registry_receipt": b_receipt}
+    assert _verify(self_sup, evidence).reason == "self_supersession"
     a_lineage = evidence["contexts"][cc.A]["body"]["lineage_id"]
     sup.update(superseded_by=cc.A, lineage_id=a_lineage)
-    assert "envelope" in str(_verify(sup, evidence).reason)  # lineage_id != the receipt's
+    sup["registry_receipt"] = {**b_receipt, "ctx_id": cc.A}
+    assert _verify(sup, evidence).reason == "lineage_id_mismatch"
     sup["registry_receipt"] = {**b_receipt, "ctx_id": cc.A, "lineage_id": a_lineage}
     assert "differs" in str(_verify(sup, evidence).reason)  # A verifies; the receipt is not A's
     foreign = copy.deepcopy(evidence)
     foreign["contexts"][cc.A]["body"]["origin_registry"] = "other.example.com"
     assert "origin_registry" in str(_verify(sup, foreign).reason)
     sup["registry_receipt"] = evidence["contexts"][cc.A]["registry_receipt"]
-    assert "recorded_at" in str(_verify(sup, evidence).reason)
     sup["recorded_at"] = sup["registry_receipt"]["created_at"]
     assert "supersede" in str(_verify(sup, evidence).reason)
     evidence["contexts"][cc.A]["body"]["title"] = "tampered"
@@ -200,7 +204,7 @@ def test_key_revocation_rejections() -> None:
     foreign["contexts"][cc.E]["body"]["origin_registry"] = "other.example.com"
     assert "origin_registry" in str(_verify(change, foreign).reason)
     renamed = {**change, "registry_receipt": {**change["registry_receipt"], "ctx_id": cc.A}}
-    assert "envelope" in str(_verify(renamed, evidence).reason)
+    assert _verify(renamed, evidence).reason == "ctx_id_mismatch"
     wrong_agent = {**change, "agent_id": cc.KEY_DID}
     assert "agent_id" in str(_verify(wrong_agent, evidence).reason)
     tampered_entry = copy.deepcopy(change)
@@ -234,5 +238,66 @@ def test_consumer_reverifies_on_a_failed_entry() -> None:
     results = consumer.on_page({"changes": [bad], "next_cursor": "c1", "has_more": False})
     assert not results[0].accepted
     assert seen == [[cc.B]]
-    consumer.on_error("invalid_cursor")
+    assert consumer.on_error("not_found") is False
     assert consumer.cursor == "c1"
+
+
+def _consumer(seen: list[list[str]], evidence: Any, **kw: Any) -> RecallConsumer:
+    return RecallConsumer(
+        "registry.example.com",
+        [cc.B],
+        lambda _e: evidence,
+        lambda ids: seen.append(list(ids)),
+        **kw,
+    )
+
+
+@pytest.mark.parametrize("code", ["cursor_expired", "invalid_cursor"])
+def test_resync_clears_seq_dedup(code: str) -> None:
+    """§7 Resync: re-verify, clear (authority, seq) dedup, resume at head."""
+    change, evidence = _lifecycle()
+    seen: list[list[str]] = []
+    consumer = _consumer(seen, evidence)
+    consumer.processed.add(("other.example.com", 1))  # another authority's state survives
+    page = {"changes": [change], "next_cursor": "c1", "has_more": False}
+    consumer.on_page(page)
+    assert ("registry.example.com", change["seq"]) in consumer.processed
+    assert consumer.on_error(code) is True
+    assert seen == [[cc.B]]
+    assert consumer.processed == {("other.example.com", 1)}
+    assert consumer.request_params() == {"since": "head"}
+    assert not consumer.at_head
+    # J: after the resync the same seq is a new entry, processed again.
+    assert len(consumer.on_page(page)) == 1
+    assert len(consumer.results) == 2
+
+
+@pytest.mark.parametrize("cursor", [None, "head"])
+def test_invalid_cursor_without_a_persisted_cursor_does_not_resync(cursor: str | None) -> None:
+    _, evidence = _lifecycle()
+    seen: list[list[str]] = []
+    consumer = _consumer(seen, evidence, cursor=cursor)
+    assert consumer.on_error("invalid_cursor") is False
+    assert seen == []
+    assert consumer.cursor == cursor
+
+
+def test_only_has_more_false_is_the_head() -> None:
+    change, evidence = _lifecycle()
+    consumer = _consumer([], evidence)
+    consumer.on_page({"changes": [change], "next_cursor": "c1", "has_more": True})
+    assert not consumer.at_head
+    assert consumer.request_params() == {"since": "c1"}
+    consumer.on_page({"changes": [], "next_cursor": "c2", "has_more": False})
+    assert consumer.at_head
+
+
+def test_check_envelope_served_evidence() -> None:
+    """rec-009 step 5: JCS equality with the served copy, not byte equality."""
+    change, _ = _lifecycle()
+    reordered = dict(reversed(list(change["event"].items())))
+    assert check_envelope(change, {"lifecycle_event": reordered}) is None
+    assert check_envelope(change, {}) == "evidence_mismatch"
+    tampered = {**change["event"], "occurred_at": cc.T}
+    assert check_envelope(change, {"lifecycle_event": tampered}) == "evidence_mismatch"
+    assert check_envelope(change) is None  # no served copy: evidence check deferred
