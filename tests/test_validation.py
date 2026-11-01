@@ -321,13 +321,34 @@ class TestCapabilities:
         with pytest.raises(SchemaViolation):
             validation.validate_capabilities(self._caps(), fetched_authority="other.example")
 
-    def test_open_top_level_closed_limits(self) -> None:
+    def test_open_top_level_and_open_limits(self) -> None:
+        # From 0.5.0 limits is open too (schema-010); known fields keep constraints.
         caps = self._caps()
         caps["supports_push_subscriptions"] = True
         validation.validate_capabilities(caps)
         caps["limits"]["extra"] = 1
-        with pytest.raises(SchemaViolation):
-            validation.validate_capabilities(caps)
+        validation.validate_capabilities(caps)
+
+    @pytest.mark.parametrize(
+        ("name", "floor"),
+        [
+            ("max_publish_per_minute", 1),
+            ("max_reads_per_minute", 1),
+            ("max_anonymous_reads_per_minute", 1),
+            ("change_retention_seconds", 2592000),
+            ("max_change_filters", 100),
+            ("max_changes_page", 100),
+            ("max_subscriptions_per_requester", 1),
+        ],
+    )
+    def test_known_limit_floors(self, name: str, floor: int) -> None:
+        caps = self._caps()
+        caps["limits"][name] = floor
+        validation.validate_capabilities(caps)
+        for bad in (floor - 1, float(floor) + 0.5, True, None, str(floor)):
+            caps["limits"][name] = bad
+            with pytest.raises(SchemaViolation):
+                validation.validate_capabilities(caps)
 
     def test_idempotency_ttl_bounds(self) -> None:
         caps = self._caps()

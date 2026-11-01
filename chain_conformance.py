@@ -31,6 +31,7 @@ from acdp_verifier.hashing import content_hash, derive_lineage_id, producer_cont
 from acdp_verifier.recall import (
     HintRejected,
     RecallConsumer,
+    check_envelope,
     hint_signature,
     verify_change,
     verify_hint,
@@ -1093,21 +1094,82 @@ def run_rec_006(fixture: Mapping[str, Any], spec_dir: Path) -> None:
     result = verify(entry, bundle.build(), relied_on=[A, B])
     _expect("F (out of scope)", (result.accepted, result.affected), (True, ()))
 
-    # G — the same (authority, seq) twice is processed once.
-    reverified: list[list[str]] = []
-    consumer = RecallConsumer(
-        REGISTRY_HOST, relied, lambda _e: retrieved, lambda ids: reverified.append(list(ids))
-    )
+    # G — the same verified entry twice leaves the same reliance state as
+    # once: processed once between resyncs.
+    def error_code(prefix: str) -> str:
+        scenario = next(s for s in fixture["scenarios"] if s["name"].startswith(prefix))
+        return str(scenario["expected"]["error_code"])
+
+    def fresh_consumer() -> tuple[RecallConsumer, list[list[str]]]:
+        log: list[list[str]] = []
+        consumer = RecallConsumer(
+            REGISTRY_HOST, relied, lambda _e: retrieved, lambda ids: log.append(list(ids))
+        )
+        return consumer, log
+
+    consumer, reverified = fresh_consumer()
     page = {"changes": [lifecycle, lifecycle], "next_cursor": "c2VxOjEwNDI", "has_more": False}
     consumer.on_page(page)
     consumer.on_page(page)
     _expect("G processed", len(consumer.results), 1)
     _expect("G cursor", consumer.cursor, "c2VxOjEwNDI")
+    _expect("G at head", consumer.at_head, True)
 
     # H — cursor_expired: re-verify every watched context, resume at head.
-    consumer.on_error(fixture["scenarios"][-1]["expected"]["error_code"])
+    _expect("H resync", consumer.on_error(error_code("H")), True)
     _expect("H reverify", reverified, [relied])
     _expect("H cursor", consumer.request_params(), {"since": "head"})
+    _expect("H dedup cleared", consumer.processed, set())
+
+    # I — invalid_cursor on a persisted cursor is treated as cursor_expired.
+    consumer, reverified = fresh_consumer()
+    consumer.on_page(page)
+    _expect("I resync", consumer.on_error(error_code("I")), True)
+    _expect("I reverify", reverified, [relied])
+    _expect("I cursor", consumer.request_params(), {"since": "head"})
+    _expect("I dedup cleared", consumer.processed, set())
+    # ... but not for a cursor the consumer never persisted (nothing to resync from).
+    consumer, reverified = fresh_consumer()
+    _expect("I (no persisted cursor)", consumer.on_error(error_code("I")), False)
+    _expect("I (no persisted cursor) reverify", reverified, [])
+
+    # J — seq reused after a resync: a different entry at the same seq is new.
+    consumer, _ = fresh_consumer()
+    consumer.on_page(page)
+    consumer.on_error(error_code("I"))
+    reused = _lifecycle_entry(int(lifecycle["seq"]), B, retrieved["contexts"][B]["body"], e1, r1)
+    consumer.evidence_for = lambda _e: full
+    after = consumer.on_page({"changes": [reused], "next_cursor": "c2VxOjk", "has_more": False})
+    _expect("J processed", [(r.accepted, r.retraction) for r in after], [(True, "not_retracted")])
+    _expect("J results", len(consumer.results), 2)
+
+    # K — revocation matched by the retrieved fingerprint: of two relied
+    # contexts by the same controller, only the one signed by the revoked
+    # key (key-1) is touched; the one signed by key-2 is unchanged. The entry
+    # names only the controller (it carries no fingerprint).
+    check("revoked_key_fingerprint" not in revocation_entry, "K: entry carries a fingerprint")
+    bundle = chain_002_bundle()
+    bundle.add(C, "2026-09-12T00:00:00.000Z", [], WEB_KEY_2)
+    result = verify(revocation_entry, bundle.build(), relied_on=[B, C])
+    _expect("K", (result.accepted, result.affected), (True, (B,)))
+
+    # L — feed silence is not non-revocation: a page with no key_revocation
+    # entry changes nothing, and the scheduled RFC-ACDP-0014 §8 discovery
+    # (here: chain verification over the discovered revocation) still finds it.
+    consumer, _ = fresh_consumer()
+    _expect(
+        "L empty page",
+        consumer.on_page({"changes": [], "next_cursor": "c2VxOjEw", "has_more": False}),
+        [],
+    )
+    verdict = run(chain_002_bundle())
+    _expect("L discovery", value(verdict, B, "latest", "key_revocation"), "revoked")
+
+    # M — a short (clamped) page is not the head: only has_more: false says so.
+    consumer, _ = fresh_consumer()
+    consumer.on_page({"changes": [lifecycle], "next_cursor": "c2VxOjEwNDI", "has_more": True})
+    _expect("M at head", consumer.at_head, False)
+    _expect("M next pull", consumer.request_params(), {"since": "c2VxOjEwNDI"})
 
 
 def run_rec_007(fixture: Mapping[str, Any], spec_dir: Path) -> None:
@@ -1150,4 +1212,31 @@ def run_rec_007(fixture: Mapping[str, Any], spec_dir: Path) -> None:
     # A-C and F-H are registry-side (subscriptions, delivery, SSRF, visibility).
 
 
-RECALL_EXECUTORS = {"rec-006": run_rec_006, "rec-007": run_rec_007}
+_ENVELOPE_ONLY = frozenset(
+    {"recorded_at_mismatch", "ctx_id_mismatch", "self_supersession", "lineage_id_mismatch"}
+)
+
+
+def run_rec_009(fixture: Mapping[str, Any], spec_dir: Path) -> None:
+    """Entry-envelope known answers (RFC-ACDP-0018 §7), in the fixture's check_order."""
+    check(len(fixture["check_order"]) == 5, "rec-009: check_order changed; update check_envelope")
+    for vector in fixture["vectors"]:
+        name, entry = vector["name"], vector["entry"]
+        expected = vector["expected"]
+        reason = check_envelope(entry, vector.get("served", {}))
+        verdict = "accept" if reason is None else "reject"
+        _expect(name, (verdict, reason), (expected["verdict"], expected.get("reason")))
+        # verify_change runs the same envelope rule first: a pure envelope
+        # fault surfaces with the same reason before any evidence is
+        # consulted, unless the entry schema (canonical-ms timestamps)
+        # already rejected it.
+        if reason in _ENVELOPE_ONLY:
+            result = verify_change(entry, {}, registry_authority=REGISTRY_HOST)
+            got = str(result.reason)
+            check(
+                not result.accepted and (got == reason or got.startswith("schema_violation")),
+                f"{name} (verify_change): expected reject/{reason}, got {result}",
+            )
+
+
+RECALL_EXECUTORS = {"rec-006": run_rec_006, "rec-007": run_rec_007, "rec-009": run_rec_009}

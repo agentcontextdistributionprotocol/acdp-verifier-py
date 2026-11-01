@@ -1542,23 +1542,28 @@ def run_caps_simple(fixture: JsonObj, ctx: SpecContext) -> None:
         expect_code(call, fixture["expected"]["error_code"], fixture["id"])
 
 
-def run_caps_007(fixture: JsonObj, ctx: SpecContext) -> None:
+def run_caps_reject_variants(fixture: JsonObj, ctx: SpecContext) -> None:
+    """caps-007 / caps-008: an accept case plus single-``limits.*``-override reject variants."""
+    fid = fixture["id"]
     doc = fixture["input"]["response_body"]
     expect_accept(
         lambda: validation.validate_capabilities(doc, fetched_authority=REGISTRY_AUTHORITY),
-        "caps-007 accept case",
+        f"{fid} accept case",
     )
     for variant in fixture["reject_variants"]:
-        override = variant["response_body_override"]["limits.max_publish_per_minute"]
         mutated = json.loads(json.dumps(doc))
-        mutated["limits"]["max_publish_per_minute"] = override
+        for path, override in variant["response_body_override"].items():
+            section, _, name = path.partition(".")
+            if section != "limits" or not name:
+                raise CheckFailure(f"{fid}: unsupported override path {path!r}")
+            mutated["limits"][name] = override
         expect_code(
             lambda: validation.validate_capabilities(
                 mutated,  # noqa: B023 -- expect_code() calls fn() synchronously before the next iteration rebinds mutated
                 fetched_authority=REGISTRY_AUTHORITY,
             ),
             variant["expected"]["error_code"],
-            f"caps-007 reject variant {variant['name']}",
+            f"{fid} reject variant {variant['name']}",
         )
 
 
@@ -2568,7 +2573,8 @@ _EXECUTORS: dict[str, Executor] = {
     "caps-004": run_caps_simple,
     "caps-005": run_caps_simple,
     "caps-006": run_caps_simple,
-    "caps-007": run_caps_007,
+    "caps-007": run_caps_reject_variants,
+    "caps-008": run_caps_reject_variants,
     "idem-007": run_idem_007,
     "status-001": run_status,
     "status-002": run_status,

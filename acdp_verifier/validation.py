@@ -587,20 +587,27 @@ def validate_body(body: Any) -> None:
 
 # --- capabilities (RFC-ACDP-0007 §3.5 checklist) --------------------------------
 
-_LIMITS_ALLOWED = frozenset(
-    {
-        "max_payload_bytes",
-        "max_embedded_bytes",
-        "idempotency_key_ttl_seconds",
-        "max_publish_per_minute",
-    }
-)
+# Optional known ``limits`` fields that are plain integer floors (``type:
+# integer, minimum: N``). The sub-object is OPEN from 0.5.0 (RFC-ACDP-0007
+# §3.3.1, schema-010): unknown fields are tolerated, known ones keep their
+# constraints. max_embedded_bytes / max_payload_bytes / the idempotency TTL
+# carry their own checks below.
+_LIMITS_INT_FLOORS: Mapping[str, int] = {
+    "max_publish_per_minute": 1,  # 0.3.0, caps-007
+    "max_reads_per_minute": 1,  # 0.5.0, caps-008
+    "max_anonymous_reads_per_minute": 1,  # 0.5.0, caps-008
+    "change_retention_seconds": 2592000,  # 0.5.0, RFC-ACDP-0018 §9
+    "max_change_filters": 100,  # 0.5.0, RFC-ACDP-0018 §9
+    "max_changes_page": 100,  # 0.5.0, RFC-ACDP-0018 §9
+    "max_subscriptions_per_requester": 1,  # 0.5.0, RFC-ACDP-0018 §9
+}
 
 
 def validate_capabilities(caps: Any, *, fetched_authority: str | None = None) -> None:
     """Validate a capabilities document (schema + §3.5 value checks).
 
-    The document top level is OPEN; the ``limits`` sub-object is CLOSED.
+    The document top level is OPEN, and so (from 0.5.0) is the ``limits``
+    sub-object: unknown limits fields are tolerated, known ones validated.
     ``fetched_authority``, when given, enables checklist item 2 (registry_did
     must bind to the serving hostname).
     """
@@ -645,13 +652,10 @@ def validate_capabilities(caps: Any, *, fetched_authority: str | None = None) ->
     if not isinstance(profiles, list) or "acdp-registry-core" not in profiles:
         raise _fail("profiles MUST contain 'acdp-registry-core'")
 
-    # limits sub-object: CLOSED schema.
+    # limits sub-object: OPEN from 0.5.0 (schema-010); known fields validated.
     limits = caps.get("limits")
     if not isinstance(limits, Mapping):
         raise _fail("capabilities.limits missing or not an object")
-    extra = set(limits.keys()) - _LIMITS_ALLOWED
-    if extra:
-        raise _fail(f"capabilities.limits is a closed schema; unknown fields: {sorted(extra)}")
 
     # Item 6 — max_embedded_bytes fixed at 65536.
     if limits.get("max_embedded_bytes") != MAX_EMBEDDED_BYTES:
@@ -683,11 +687,13 @@ def validate_capabilities(caps: Any, *, fetched_authority: str | None = None) ->
             "supports_idempotency_key: true (RFC-ACDP-0003 §6.4; idem-007)"
         )
 
-    # Item 11 (0.3.0) — max_publish_per_minute >= 1 when present.
-    if "max_publish_per_minute" in limits:
-        ceiling = limits["max_publish_per_minute"]
-        if not isinstance(ceiling, int) or isinstance(ceiling, bool) or ceiling < 1:
-            raise _fail("limits.max_publish_per_minute must be an integer >= 1")
+    # Item 11 (0.3.0) max_publish_per_minute, item 12 (0.5.0) the read
+    # ceilings, and the RFC-ACDP-0018 feed limits: integer >= floor when present.
+    for name, floor in _LIMITS_INT_FLOORS.items():
+        if name in limits:
+            value = limits[name]
+            if not isinstance(value, int) or isinstance(value, bool) or value < floor:
+                raise _fail(f"limits.{name} must be an integer >= {floor}")
 
 
 # --- responses ------------------------------------------------------------------

@@ -6,10 +6,13 @@
   same machinery as the RFC-ACDP-0017 latest pass, never over the entry's
   say-so.
 * :func:`hint_signature` / :func:`verify_hint` — §8.2 ``ACDP-Signature``.
+* :func:`check_envelope` — the §7 envelope-consistency rule in rec-009's
+  ``check_order``; :func:`verify_change` runs it first.
 * :class:`RecallConsumer` — the §7 delivery rules: dedupe by
-  (registry authority, seq), persist the cursor only after a whole page,
-  resync on ``cursor_expired``, and pull from the consumer's own cursor on a
-  hint (never ``head_cursor``).
+  (registry authority, seq) between resyncs only, persist the cursor only
+  after a whole page, resync on ``cursor_expired`` (and on ``invalid_cursor``
+  for a persisted cursor), treat only ``has_more: false`` as the head, and
+  pull from the consumer's own cursor on a hint (never ``head_cursor``).
 
 Implemented from the RFC-ACDP-0018 text and its schemas only.
 """
@@ -41,6 +44,7 @@ __all__ = [
     "ChangeResult",
     "HintRejected",
     "RecallConsumer",
+    "check_envelope",
     "hint_signature",
     "verify_change",
     "verify_hint",
@@ -127,6 +131,48 @@ def _validate_entry(entry: Any) -> str | None:
     return None
 
 
+def check_envelope(entry: Mapping[str, Any], served: Mapping[str, Any] | None = None) -> str | None:
+    """RFC-ACDP-0018 §7 envelope consistency, in rec-009's ``check_order``.
+
+    Returns the first failing reason token (``recorded_at_mismatch``,
+    ``ctx_id_mismatch``, ``self_supersession``, ``lineage_id_mismatch``,
+    ``evidence_mismatch``) or None. The tokens are fixture vocabulary, not
+    wire error codes. ``served`` is the evidence the consumer retrieved:
+    ``lifecycle_event`` for a lifecycle entry, ``registry_receipt``
+    otherwise; with ``served`` None the evidence check is skipped (the
+    caller compares against its own retrieval later). Signatures are not
+    checked here. The entry is assumed schema-valid (:func:`_validate_entry`).
+    """
+    kind = entry["kind"]
+    ctx_id = entry["ctx_id"]
+    if kind == "lifecycle":
+        event, receipt = entry["event"], entry["event_receipt"]
+        if entry["recorded_at"] != receipt.get("accepted_at"):
+            return "recorded_at_mismatch"
+        if event.get("ctx_id") != ctx_id or receipt.get("ctx_id") != ctx_id:
+            return "ctx_id_mismatch"
+        mine, key = event, "lifecycle_event"
+    else:
+        receipt = entry["registry_receipt"]
+        if entry["recorded_at"] != receipt.get("created_at"):
+            return "recorded_at_mismatch"
+        if kind == "superseded":
+            if receipt.get("ctx_id") != entry["superseded_by"]:
+                return "ctx_id_mismatch"
+            if entry["superseded_by"] == ctx_id:
+                return "self_supersession"
+            if receipt.get("lineage_id") != entry["lineage_id"]:
+                return "lineage_id_mismatch"
+        elif receipt.get("ctx_id") != ctx_id:
+            return "ctx_id_mismatch"
+        mine, key = receipt, "registry_receipt"
+    if served is not None:
+        theirs = served.get(key)
+        if theirs is None or not _canon_equal(mine, theirs):
+            return "evidence_mismatch"
+    return None
+
+
 def verify_change(
     entry: Mapping[str, Any],
     evidence: Mapping[str, Any],
@@ -151,6 +197,9 @@ def verify_change(
     problem = _validate_entry(entry)
     if problem is not None:
         return _reject(f"schema_violation: {problem}")
+    envelope = check_envelope(entry)
+    if envelope is not None:
+        return _reject(envelope, str(entry["ctx_id"]))
     try:
         validate_evidence(evidence)
     except EvidenceRejected as exc:
@@ -384,6 +433,10 @@ class RecallConsumer:
     cursor: str | None = None
     processed: set[tuple[str, int]] = field(default_factory=set)
     results: list[ChangeResult] = field(default_factory=list)
+    #: The last page's ``has_more`` was false. Only that says the feed is at
+    #: the head; a page shorter than the requested ``limit`` does not (a
+    #: registry clamps ``limit`` and filtering thins pages, §5.1).
+    at_head: bool = False
 
     def request_params(self, watch_filter: Mapping[str, Any] | None = None) -> JsonObj:
         """Parameters for the next ``GET /changes``: always the consumer's own cursor."""
@@ -411,7 +464,9 @@ class RecallConsumer:
         for entry in response.get("changes", []):
             key = (self.registry_authority, int(entry["seq"]))
             if key in self.processed:
-                continue  # at-least-once delivery: process each (authority, seq) once
+                # At-least-once delivery. Dedup by (authority, seq) is valid
+                # only between resyncs; on_error() clears it (§7 Idempotency).
+                continue
             result = verify_change(
                 entry,
                 self.evidence_for(entry),
@@ -424,10 +479,25 @@ class RecallConsumer:
             self.processed.add(key)
         self.results.extend(page)
         self.cursor = str(response["next_cursor"])
+        self.at_head = response.get("has_more") is False
         return page
 
-    def on_error(self, code: str) -> None:
-        """``cursor_expired``: re-verify every watched context, then resume at ``head``."""
-        if code == "cursor_expired":
+    def on_error(self, code: str) -> bool:
+        """Handle a ``GET /changes`` error; True when it forced a resync (§7 Resync).
+
+        ``cursor_expired`` always resyncs. ``invalid_cursor`` resyncs when the
+        rejected cursor is one this consumer persisted from an earlier
+        response: the registry issued it, so it can no longer place it,
+        whatever code it chose (§5.4). A resync re-verifies every watched
+        context, clears the (authority, seq) dedup state for this authority
+        (``seq`` may be reused after a sequence reset, §5.3), and resumes at
+        ``head``.
+        """
+        persisted = self.cursor is not None and self.cursor != "head"
+        if code == "cursor_expired" or (code == "invalid_cursor" and persisted):
             self.reverify(list(self.watched))
+            self.processed = {k for k in self.processed if k[0] != self.registry_authority}
             self.cursor = "head"
+            self.at_head = False
+            return True
+        return False

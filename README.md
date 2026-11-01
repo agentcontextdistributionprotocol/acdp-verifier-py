@@ -97,14 +97,14 @@ pluggable-store pattern RFC-ACDP-0001 §5.11 recommends).
 | `acdp_verifier.revocation` | `key-revocation` shape (§4), not-self-signed rule (§5), compromise-boundary semantics (§7) (RFC-ACDP-0014) |
 | `acdp_verifier.cosignature` | Witness cosignatures: closed `acdp-log-cosignature` object (§4), the §5 signing construction (reused from `receipts`, keyed by the witness), the §8 consumer procedure (closed parse, witness-key signature, witness binding, checkpoint binding, `witnessed_at` skew), and §8 N-witnessed quorum evaluation (RFC-ACDP-0015) |
 | `acdp_verifier.seamdecision` | RFC-ACDP-0016 §6 scheme-aware hook for `seam.decision` anchors: recomputes the Seam record digest v4 (Seam `seam-api-v0.48.0`) from a disclosed sealed record → `match` / `mismatch` / `cannot_verify` (unknown `schema_version`, malformed or inconsistent disclosure), never touching the body's ACDP verdict |
-| `acdp_verifier.validation` | Structural validation: publish requests/bodies, the DataRef §6.6 checklist, metadata limits, capabilities §3.5 checklist (incl. the 0.3.0 idem-007 cross-field rule and caps-007), status pattern, closed-schema and absent-vs-null rules |
+| `acdp_verifier.validation` | Structural validation: publish requests/bodies, the DataRef §6.6 checklist, metadata limits, capabilities §3.5 checklist (incl. the 0.3.0 idem-007 cross-field rule, caps-007 and the 0.5.0 caps-008 read ceilings; `limits` open from 0.5.0 per schema-010, known fields still checked), status pattern, closed-schema and absent-vs-null rules |
 | `acdp_verifier.verify` | The strict §5.11 pipeline: schema → hash recompute → key binding → resolution → signature |
 | `acdp_verifier.evidence` | The `acdp-evidence/1` schema gate (RFC-ACDP-0017 §4.1: a malformed bundle is rejected whole), plus the closed lifecycle-event, event-receipt and registry-receipt shapes |
 | `acdp_verifier.chain` | `verify_chain` (RFC-ACDP-0017): the deterministic BFS walk with limits, frontier and cycle detection; the as-of and latest passes over §6.2 snapshot selection and §6.3 pinned options; all nine §7 stages incl. §10.3 event-receipt verification and the RFC-ACDP-0014 revocation fold; §8 caveats, verdicts, tainted paths and drift; the §9 verdict object with `verdict_digest` / `as_of_digest`. Reads no wall clock |
 | `acdp_verifier.mcp` | RFC-ACDP-0019 consumer side: the §4.3 hashed result and salted/unsalted call hashes, strict 32-byte base64url salt, and `verify_tool_result`, the five-step holder check of a `CallToolResult` against its `io.acdp/provenance` link (the proxy side is out of scope) |
 | `acdp_verifier.trustlist` | RFC-ACDP-0020 consumer side: issuer pins, §5.2 list-version validation (the closed `acdp-trust-list/1` object included), §5.3–§5.4 series state and version selection (floor, rollback, equivocation, issuer-only retraction, as-of), §6.2 body evaluation, and the deterministic `acdp-trust-report/1` (§8), including `chain_trust_report` over an RFC-ACDP-0017 verdict |
 | `acdp_verifier.keyless` | RFC-ACDP-0021 consumer side (`acdp-consumer-keyless`): the closed `acdp-key-attestation/1` object and its §5.3 runtime rules, the RFC 7638 thumbprint, keyless key ids, token hash and §5.1 proof of possession; the controller's `AcdpKeylessSigning` service (§4.1); `verify_keyless`, the §8.1 procedure in its fixed order mapped onto the three existing key statuses (§8.2), with the §9 revocation rules (retraction as a registry-attested revocation at `not_before`, org-wide keyless revocations applied, narrower ones hints, unevaluable ones `unknown`) and the §11 attester policy (none by default); and the §7 supersession table. `didweb` refuses the reserved `acdp-kl-` fragment (§4.2), and `chain` evaluates keyless nodes per §10, with the accepted attesters taken only from `pinned.keyless_attesters` (so `options_digest` covers them) |
-| `acdp_verifier.recall` | RFC-ACDP-0018 consumer side: §7 `verify_change` for `lifecycle` / `superseded` / `key_revocation` entries over the consumer's own retrievals, the §8.2 `ACDP-Signature` HMAC (key = UTF-8 of the secret string), and a no-I/O `RecallConsumer` (dedupe by authority+seq, cursor after a whole page, resync on `cursor_expired`, pull from its own cursor on a hint) |
+| `acdp_verifier.recall` | RFC-ACDP-0018 consumer side: §7 `verify_change` for `lifecycle` / `superseded` / `key_revocation` entries over the consumer's own retrievals, the §8.2 `ACDP-Signature` HMAC (key = UTF-8 of the secret string), and `check_envelope` (the §7 envelope rule in rec-009's `check_order`, run first by `verify_change`), and a no-I/O `RecallConsumer` (dedupe by authority+seq between resyncs only, cursor after a whole page, resync on `cursor_expired` or on `invalid_cursor` for a persisted cursor, only `has_more: false` is the head, pull from its own cursor on a hint) |
 
 **Out of scope** (skipped by the runner with explicit markers, never
 silently): SSRF/transport families (`did-ssrf-*`, `data-ref-ssrf-*`,
@@ -168,8 +168,8 @@ applies it automatically in its blame view, but plain `git blame` does not —
 run `git config blame.ignoreRevsFile .git-blame-ignore-revs` once locally to
 get the same effect.
 
-Current conformance status: **128 in-scope fixtures PASS, 0 FAIL, 76 SKIP
-(explicit out-of-scope markers), 204 total** at spec `1560e0f` — including every golden vector
+Current conformance status: **130 in-scope fixtures PASS, 0 FAIL, 77 SKIP
+(explicit out-of-scope markers), 207 total** at spec `dd5486c` — including every golden vector
 (`sig-001..004`, `can-001..013`, `lin-001`, `fp-001`, `rcpt-001..006`,
 `rot-001`, `rev-001/002/006/007` (`rev-007`: the 20 RFC-ACDP-0014 §7 classification known answers), `lhr-001..004`, `log-001..005`, `wit-001..005`, `body-003`,
 `anc-001..006`, where `anc-006` runs the `seam.decision` hook against Seam's
@@ -180,7 +180,7 @@ consumer side in `mcp-001` (the salted call hashes, `endpoint_hash` and the sign
 trust lists in `trust-001` (the golden list, all 20 evaluation rows and the golden trust report)
 and the behavioral `trust-002..007`; the RFC-ACDP-0021 keyless known answers in `kl-001` (the golden
 attestation, keyless-signed body and proof of possession recomputed byte for byte, the 21-case §8.2
-key-status table, the 9-case §7 supersession table and the verify-only P-256 proof of possession of vector 6) and the consumer scenarios of `kl-005..009`; and `rec-007`'s `hint-hmac-001`) and the end-to-end verification of
+key-status table, the 9-case §7 supersession table and the verify-only P-256 proof of possession of vector 6) and the consumer scenarios of `kl-005..009`; `rec-007`'s `hint-hmac-001`; and the 13 RFC-ACDP-0018 §7 entry-envelope known answers of `rec-009`, each reaching the fixture's verdict and first failing check in its `check_order`) and the end-to-end verification of
 `examples/retrieval/golden-context.json` and
 `golden-context-with-receipt.json`.
 
@@ -207,9 +207,14 @@ receipts, events and event receipts. Two scenarios are not executed:
 `chain-010` B, which needs `verify_chain_online`, and `chain-010` F, which
 needs a time budget. This verifier ships neither (§6.1 permits an
 offline-only verifier). `chain-009` A–B are registry-side issuance. On the
-recall side, `rec-006` runs every consumer scenario (A–H), and `rec-007` runs
-the HMAC known answer plus the receiver duties (D–E). The registry-side
-`rec-001..005` and `rec-008`, and `rec-007` A–C and F–H, are out of scope.
+recall side, `rec-006` runs every consumer scenario (A–M: the resync on
+`invalid_cursor` for a persisted cursor, `seq` dedup cleared on every resync,
+revocation matching by the retrieved fingerprint, feed silence answered by
+§8 discovery, and only `has_more: false` as the head), `rec-007` runs the HMAC
+known answer plus the receiver duties (D–E), and `rec-009` runs the envelope
+known answers through both `check_envelope` and `verify_change`. The
+registry-side `rec-001..005` and `rec-008` (including `rec-001` G, the
+registry's `limit` clamp), and `rec-007` A–C and F–H, are out of scope.
 
 ## Cross-implementation interop (RFC-ACDP-0015 witness cosigning)
 
