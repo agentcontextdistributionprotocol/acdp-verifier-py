@@ -1226,17 +1226,12 @@ def run_rec_009(fixture: Mapping[str, Any], spec_dir: Path) -> None:
         reason = check_envelope(entry, vector.get("served", {}))
         verdict = "accept" if reason is None else "reject"
         _expect(name, (verdict, reason), (expected["verdict"], expected.get("reason")))
-        # verify_change runs the same envelope rule first: a pure envelope
-        # fault surfaces with the same reason before any evidence is
-        # consulted, unless the entry schema (canonical-ms timestamps)
-        # already rejected it.
+        # verify_change runs the same envelope rule first: every vector entry
+        # is schema-valid, so a pure envelope fault surfaces with the same
+        # reason before any evidence is consulted.
         if reason in _ENVELOPE_ONLY:
             result = verify_change(entry, {}, registry_authority=REGISTRY_HOST)
-            got = str(result.reason)
-            check(
-                not result.accepted and (got == reason or got.startswith("schema_violation")),
-                f"{name} (verify_change): expected reject/{reason}, got {result}",
-            )
+            _expect(f"{name} (verify_change)", (result.accepted, result.reason), (False, reason))
 
 
 RECALL_EXECUTORS = {"rec-006": run_rec_006, "rec-007": run_rec_007, "rec-009": run_rec_009}
