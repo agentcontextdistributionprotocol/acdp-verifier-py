@@ -28,7 +28,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "cryptography>=50.0.1",
+    "cryptography>=50.0.2",
 ]
 
 [project.urls]
