@@ -29,10 +29,16 @@ from acdp_verifier.evidence import EvidenceRejected
 from acdp_verifier.fingerprint import fingerprint_ed25519
 from acdp_verifier.hashing import content_hash, derive_lineage_id, producer_content
 from acdp_verifier.recall import (
+    MAX_PAGE_BYTES,
     HintRejected,
     RecallConsumer,
+    WatchSet,
+    bucket_params,
+    change_bucket,
     check_envelope,
     hint_signature,
+    in_bucket,
+    local_match,
     verify_change,
     verify_hint,
 )
@@ -1171,6 +1177,14 @@ def run_rec_006(fixture: Mapping[str, Any], spec_dir: Path) -> None:
     _expect("M at head", consumer.at_head, False)
     _expect("M next pull", consumer.request_params(), {"since": "c2VxOjEwNDI"})
 
+    # N — an oversized page is retried smaller from the same cursor; up to 1 MiB is accepted.
+    check(consumer.accepts_page(MAX_PAGE_BYTES), "N: a 1 MiB page was refused")
+    check(not consumer.accepts_page(1_400_000), "N: a 1.4 MB page was accepted")
+    retry = consumer.retry_smaller(1000)
+    _expect("N retry since", retry["since"], "c2VxOjEwNDI")
+    check(retry["limit"] < 1000, "N: retried with an unchanged limit")
+    _expect("N cursor unmoved", consumer.cursor, "c2VxOjEwNDI")
+
 
 def run_rec_007(fixture: Mapping[str, Any], spec_dir: Path) -> None:
     for vector in fixture["vectors"]:
@@ -1234,4 +1248,60 @@ def run_rec_009(fixture: Mapping[str, Any], spec_dir: Path) -> None:
             _expect(f"{name} (verify_change)", (result.accepted, result.reason), (False, reason))
 
 
-RECALL_EXECUTORS = {"rec-006": run_rec_006, "rec-007": run_rec_007, "rec-009": run_rec_009}
+def run_rec_010(fixture: Mapping[str, Any], spec_dir: Path) -> None:
+    """Bucket derivation vectors (G) and the consumer duties H and I (RFC-ACDP-0018 §6.1)."""
+    for vector in fixture["vectors"]:
+        name, value = vector["name"], vector["bucket_of"]
+        check(vector["member"] in ("lineage_id", "agent_id"), f"{name}: member")
+        _expect(f"{name} sha256", change_bucket(value, 64), vector["sha256_hex"])
+        for n, want in vector["expected"].items():
+            _expect(f"{name} bucket {n}", change_bucket(value, int(n)), want)
+            check(in_bucket(value, want), f"{name}: not in its own bucket {want}")
+        wrong = vector.get("not_bucket_4")
+        if wrong is not None:
+            check(change_bucket(value, 4) != wrong, f"{name}: derived the not_bucket_4 value")
+            check(not in_bucket(value, wrong), f"{name}: matched not_bucket_4")
+
+    # H — a bucket response is a candidate set; the consumer matches exactly.
+    lineages = [v["bucket_of"] for v in fixture["vectors"] if v["member"] == "lineage_id"]
+    agents = [v["bucket_of"] for v in fixture["vectors"] if v["member"] == "agent_id"]
+    lx, ly, producer = lineages[0], lineages[1], agents[0]
+    x = {"seq": 1, "kind": "lifecycle", "ctx_id": "x", "lineage_id": lx, "agent_id": agents[1]}
+    y = {"seq": 2, "kind": "lifecycle", "ctx_id": "y", "lineage_id": ly, "agent_id": agents[1]}
+    r = {"seq": 3, "kind": "key_revocation", "ctx_id": "r", "lineage_id": ly, "agent_id": producer}
+    by_lineage = WatchSet(lineage_ids=frozenset({lx}))
+    check(local_match(x, by_lineage), "rec-010 H: the watched lineage's entry was dropped")
+    check(not local_match(y, by_lineage), "rec-010 H: a bucket neighbour was kept")
+    check(not local_match(r, by_lineage), "rec-010 H: an unwatched revocation was kept")
+    with_producer = WatchSet(lineage_ids=frozenset({lx}), agent_ids=frozenset({producer}))
+    check(local_match(r, with_producer), "rec-010 H: the controller's key_revocation was dropped")
+    seen: list[str] = []
+
+    def retrieve(entry: Mapping[str, Any]) -> JsonObj:
+        seen.append(str(entry["ctx_id"]))
+        return {}
+
+    consumer = RecallConsumer(REGISTRY_HOST, ["x"], retrieve, lambda _ids: None, exact=by_lineage)
+    consumer.on_page({"changes": [x, y], "next_cursor": "c", "has_more": False})
+    _expect("rec-010 H verified", seen, ["x"])
+
+    # I — no bucket to a registry that does not advertise the limit; never longer than it.
+    watch = WatchSet(lineage_ids=frozenset(lineages), agent_ids=frozenset({producer}))
+    caps = copy.deepcopy(fixture["input"]["capabilities"])
+    maximum = caps["limits"]["max_change_bucket_length"]
+    params = bucket_params(watch, 64, caps)
+    check(params is not None, "rec-010 I: no buckets despite the advertised limit")
+    assert params is not None
+    for bucket in [*params["lineage_bucket"], *params["agent_bucket"]]:
+        check(len(bucket) == maximum, f"rec-010 I: bucket {bucket} exceeds the advertised limit")
+    del caps["limits"]["max_change_bucket_length"]
+    _expect("rec-010 I (no limit)", bucket_params(watch, 4, caps), None)
+    # A-F are registry-side.
+
+
+RECALL_EXECUTORS = {
+    "rec-006": run_rec_006,
+    "rec-007": run_rec_007,
+    "rec-009": run_rec_009,
+    "rec-010": run_rec_010,
+}
