@@ -8,11 +8,19 @@
 * :func:`hint_signature` / :func:`verify_hint` — §8.2 ``ACDP-Signature``.
 * :func:`check_envelope` — the §7 envelope-consistency rule in rec-009's
   ``check_order``; :func:`verify_change` runs it first.
+* :func:`change_bucket` / :func:`bucket_params` / :func:`local_match` — the
+  §6.1 bucket watch filters: derive a bucket as the first n lowercase hex
+  digits of SHA-256 over the exact UTF-8 ``lineage_id`` / ``agent_id``, send
+  buckets only to a registry advertising ``limits.max_change_bucket_length``
+  (never longer than it), and match a bucket response exactly, locally,
+  before §7 verification.
 * :class:`RecallConsumer` — the §7 delivery rules: dedupe by
   (registry authority, seq) between resyncs only, persist the cursor only
   after a whole page, resync on ``cursor_expired`` (and on ``invalid_cursor``
   for a persisted cursor), treat only ``has_more: false`` as the head, and
-  pull from the consumer's own cursor on a hint (never ``head_cursor``).
+  pull from the consumer's own cursor on a hint (never ``head_cursor``), and
+  accept pages up to 1 MiB, retrying an oversized one with a smaller
+  ``limit`` from the same cursor (§5.2).
 
 Implemented from the RFC-ACDP-0018 text and its schemas only.
 """
@@ -41,17 +49,25 @@ from .validation import CTX_ID_RE, DID_RE, LINEAGE_ID_RE, ctx_id_authority
 __all__ = [
     "CHANGE_VERSION",
     "HINT_TOLERANCE_SECONDS",
+    "MAX_PAGE_BYTES",
     "ChangeResult",
     "HintRejected",
     "RecallConsumer",
+    "WatchSet",
+    "bucket_params",
+    "change_bucket",
     "check_envelope",
     "hint_signature",
+    "in_bucket",
+    "local_match",
     "verify_change",
     "verify_hint",
 ]
 
 CHANGE_VERSION = "acdp-change/1"
 HINT_TOLERANCE_SECONDS = 300
+#: §5.2: a consumer MUST accept a ``/changes`` response body up to 1 MiB.
+MAX_PAGE_BYTES = 1024 * 1024
 
 _COMMON = frozenset(
     {"change_version", "seq", "kind", "ctx_id", "lineage_id", "agent_id", "recorded_at"}
@@ -366,6 +382,78 @@ def _verify_key_revocation(
 
 
 # ---------------------------------------------------------------------------
+# Bucket watch filters (§6.1)
+# ---------------------------------------------------------------------------
+
+_BUCKET_RE = re.compile(r"^[0-9a-f]{1,64}$")
+
+
+def change_bucket(value: str, length: int) -> str:
+    """§6.1 bucket: the first ``length`` lowercase hex digits of SHA-256(UTF-8 ``value``).
+
+    ``value`` is the ``lineage_id`` or ``agent_id`` exactly as it appears in
+    entries: the ``lin:sha256:`` prefix is hashed, and a ``did:web``
+    percent-encoding is not decoded.
+    """
+    if isinstance(length, bool) or not isinstance(length, int) or not 1 <= length <= 64:
+        raise ValueError("bucket length must be an integer in 1..64")
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:length]
+
+
+def in_bucket(value: str, bucket: str) -> bool:
+    """True when ``value`` hashes into ``bucket`` (a well-formed §6.1 value)."""
+    if not _BUCKET_RE.match(bucket):
+        raise ValueError(f"malformed bucket {bucket!r}")
+    return change_bucket(value, len(bucket)) == bucket
+
+
+@dataclass(frozen=True)
+class WatchSet:
+    """The exact values a consumer relies on; a bucket response is matched against them."""
+
+    ctx_ids: frozenset[str] = frozenset()
+    lineage_ids: frozenset[str] = frozenset()
+    agent_ids: frozenset[str] = frozenset()
+
+
+def local_match(entry: Mapping[str, Any], watch: WatchSet) -> bool:
+    """§6.1 local filter: the entry concerns an exactly watched value (OR, as in §6).
+
+    A bucket response is a candidate set; only entries passing this go on to
+    §7 verification. A ``key_revocation`` entry's ``agent_id`` is the
+    revoked key's controller (§4), so watching the producer keeps it.
+    """
+    return (
+        entry.get("ctx_id") in watch.ctx_ids
+        or entry.get("lineage_id") in watch.lineage_ids
+        or entry.get("agent_id") in watch.agent_ids
+    )
+
+
+def bucket_params(watch: WatchSet, length: int, capabilities: Mapping[str, Any]) -> JsonObj | None:
+    """``lineage_bucket`` / ``agent_bucket`` parameters for ``GET /changes``, or None.
+
+    None when the registry does not advertise ``limits.max_change_bucket_length``:
+    the consumer then sends no bucket (rec-010 I) and polls unfiltered or with
+    exact filters. ``length`` is clamped to the advertised maximum, so no
+    bucket is longer than it. Buckets are deduplicated and sorted.
+    """
+    limits = capabilities.get("limits")
+    maximum = limits.get("max_change_bucket_length") if isinstance(limits, Mapping) else None
+    if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum < 1:
+        return None
+    n = min(length, maximum)
+    params: JsonObj = {}
+    lineages = sorted({change_bucket(v, n) for v in watch.lineage_ids})
+    agents = sorted({change_bucket(v, n) for v in watch.agent_ids})
+    if lineages:
+        params["lineage_bucket"] = lineages
+    if agents:
+        params["agent_bucket"] = agents
+    return params
+
+
+# ---------------------------------------------------------------------------
 # Change hints (§8.2)
 # ---------------------------------------------------------------------------
 
@@ -437,6 +525,9 @@ class RecallConsumer:
     #: the head; a page shorter than the requested ``limit`` does not (a
     #: registry clamps ``limit`` and filtering thins pages, §5.1).
     at_head: bool = False
+    #: When set, each page is a §6.1 bucket candidate set: entries that do
+    #: not :func:`local_match` it are skipped before §7 verification.
+    exact: WatchSet | None = None
 
     def request_params(self, watch_filter: Mapping[str, Any] | None = None) -> JsonObj:
         """Parameters for the next ``GET /changes``: always the consumer's own cursor."""
@@ -444,6 +535,21 @@ class RecallConsumer:
         if self.cursor is not None:
             params["since"] = self.cursor
         return params
+
+    def accepts_page(self, body_bytes: int) -> bool:
+        """§5.2: a response body up to :data:`MAX_PAGE_BYTES` is always accepted."""
+        return body_bytes <= MAX_PAGE_BYTES
+
+    def retry_smaller(self, limit: int, watch_filter: Mapping[str, Any] | None = None) -> JsonObj:
+        """§5.2: the pull after an oversized page (rejected by :meth:`accepts_page`).
+
+        The same ``since`` (the cursor does not move: the page was not
+        processed) with a smaller ``limit`` — never the unchanged request,
+        which would stall. ``limit`` is the one that produced the page.
+        """
+        if limit <= 1:
+            raise ValueError("an oversized page at limit=1 cannot be retried smaller")
+        return {**self.request_params(watch_filter), "limit": limit // 2}
 
     def on_hint(
         self,
@@ -466,6 +572,10 @@ class RecallConsumer:
             if key in self.processed:
                 # At-least-once delivery. Dedup by (authority, seq) is valid
                 # only between resyncs; on_error() clears it (§7 Idempotency).
+                continue
+            if self.exact is not None and not local_match(entry, self.exact):
+                # A bucket neighbour: concerns nothing this consumer relies on.
+                self.processed.add(key)
                 continue
             result = verify_change(
                 entry,
