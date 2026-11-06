@@ -9,10 +9,16 @@ import pytest
 
 import chain_conformance as cc
 from acdp_verifier.recall import (
+    MAX_PAGE_BYTES,
     HintRejected,
     RecallConsumer,
+    WatchSet,
+    bucket_params,
+    change_bucket,
     check_envelope,
     hint_signature,
+    in_bucket,
+    local_match,
     verify_change,
     verify_hint,
 )
@@ -301,3 +307,63 @@ def test_check_envelope_served_evidence() -> None:
     tampered = {**change["event"], "occurred_at": cc.T}
     assert check_envelope(change, {"lifecycle_event": tampered}) == "evidence_mismatch"
     assert check_envelope(change) is None  # no served copy: evidence check deferred
+
+
+LX = "lin:sha256:a3cb6a87c1601b9f6dddd8d54709b01df3e05f1095b43e6d58e3a862bf9906fa"
+P = "did:web:registry.example.com%3A8443"
+
+
+@pytest.mark.parametrize("length", [0, 65, True, 4.0])
+def test_change_bucket_rejects_bad_lengths(length: Any) -> None:
+    with pytest.raises(ValueError, match="bucket length"):
+        change_bucket(LX, length)
+
+
+@pytest.mark.parametrize("bucket", ["", "1F54", "1g", "0" * 65])
+def test_in_bucket_rejects_malformed_values(bucket: str) -> None:
+    with pytest.raises(ValueError, match="malformed bucket"):
+        in_bucket(LX, bucket)
+
+
+def test_bucket_derivation_hashes_the_exact_string() -> None:
+    assert change_bucket(LX, 4) == "1f54"
+    assert in_bucket(LX, "1f54677c")
+    assert not in_bucket(LX, "6baa")
+    assert change_bucket(P, 4) == "cf5a"
+
+
+def test_local_match_is_an_or_over_exact_values() -> None:
+    entry = {"ctx_id": "c", "lineage_id": LX, "agent_id": P}
+    assert not local_match(entry, WatchSet())
+    assert local_match(entry, WatchSet(ctx_ids=frozenset({"c"})))
+    assert local_match(entry, WatchSet(lineage_ids=frozenset({LX})))
+    assert local_match(entry, WatchSet(agent_ids=frozenset({P})))
+
+
+@pytest.mark.parametrize(
+    "caps",
+    [{}, {"limits": None}, {"limits": {}}, {"limits": {"max_change_bucket_length": 0}}],
+)
+def test_bucket_params_need_the_advertised_limit(caps: dict[str, Any]) -> None:
+    assert bucket_params(WatchSet(lineage_ids=frozenset({LX})), 4, caps) is None
+
+
+def test_bucket_params_clamp_and_omit_empty_members() -> None:
+    caps = {"limits": {"max_change_bucket_length": 2}}
+    assert bucket_params(WatchSet(lineage_ids=frozenset({LX})), 8, caps) == {
+        "lineage_bucket": ["1f"]
+    }
+    assert bucket_params(WatchSet(agent_ids=frozenset({P})), 1, caps) == {"agent_bucket": ["c"]}
+    assert bucket_params(WatchSet(), 4, caps) == {}
+
+
+def test_oversized_page_retry() -> None:
+    consumer = RecallConsumer("registry.example.com", [], lambda _e: {}, lambda _i: None)
+    assert consumer.accepts_page(MAX_PAGE_BYTES)
+    assert not consumer.accepts_page(MAX_PAGE_BYTES + 1)
+    assert consumer.retry_smaller(1000, {"kind": ["lifecycle"]}) == {
+        "kind": ["lifecycle"],
+        "limit": 500,
+    }
+    with pytest.raises(ValueError, match="limit=1"):
+        consumer.retry_smaller(1)
