@@ -7,6 +7,7 @@ with (or ported from) the ``acdp-rs`` reference implementation.
 from __future__ import annotations
 
 from . import (
+    a2a,
     base58,
     chain,
     cosignature,
@@ -30,6 +31,7 @@ from . import (
 )
 
 __all__ = [
+    "a2a",
     "base58",
     "chain",
     "cosignature",

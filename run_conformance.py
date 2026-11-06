@@ -53,7 +53,7 @@ from acdp_verifier.fingerprint import (
     fingerprint_p256_xy,
 )
 from acdp_verifier.timeutil import parse_rfc3339
-from chain_conformance import CHAIN_EXECUTORS, RECALL_EXECUTORS, ScenarioFailure
+from chain_conformance import A2A_EXECUTORS, CHAIN_EXECUTORS, RECALL_EXECUTORS, ScenarioFailure
 from keyless_conformance import KEYLESS_EXECUTORS
 from trust_conformance import TRUST_EXECUTORS
 
@@ -88,6 +88,11 @@ SKIP_KEYLESS_REGISTRY = (
     "out-of-scope: registry profile (acdp-registry-keyless, RFC-ACDP-0021 Draft). "
     "This verifier is a consumer and mints, admits or supersedes nothing; the §7 "
     "table is executed in kl-001 vector 5 and the consumer side in kl-001, kl-005..009"
+)
+SKIP_A2A_PRODUCER = (
+    "out-of-scope: producer profile (acdp-producer-a2a, RFC-ACDP-0022 Draft). "
+    "How an agent fills derived_from from io.acdp/inputs (§7) has no holder side; "
+    "this verifier runs no agent. a2a-001 re-derives its derived_from known answer"
 )
 SKIP_DID_FETCH = (
     "out-of-scope: transport (DID-document fetch/cache/re-fetch; RFC-ACDP-0001 §5.11 "
@@ -128,6 +133,7 @@ _SKIP_IDS: dict[str, str] = {
     "rec-004": SKIP_REGISTRY,
     "rec-005": SKIP_REGISTRY,
     "rec-008": SKIP_REGISTRY,
+    "a2a-005": SKIP_A2A_PRODUCER,
     "kl-002": SKIP_KEYLESS_REGISTRY,
     "kl-003": SKIP_KEYLESS_REGISTRY,
     "kl-004": SKIP_KEYLESS_REGISTRY,
@@ -2614,6 +2620,7 @@ def _spec_dir_executor(fn: Callable[[JsonObj, Path], None]) -> Executor:
 for _fid, _fn in {
     **CHAIN_EXECUTORS,
     **RECALL_EXECUTORS,
+    **A2A_EXECUTORS,
     **TRUST_EXECUTORS,
     **KEYLESS_EXECUTORS,
 }.items():
