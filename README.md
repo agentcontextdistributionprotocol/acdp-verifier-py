@@ -64,7 +64,7 @@ future promotion stalls.
 ## Independence claim
 
 This codebase was implemented **from the RFC texts and JSON schemas only**
-(`rfcs/RFC-ACDP-0001/0002/0007/0010/0011/0012/0013/0014/0015/0017/0018/0019/0020`, `schemas/json/*`,
+(`rfcs/RFC-ACDP-0001/0002/0007/0010/0011/0012/0013/0014/0015/0017/0018/0019/0020/0022`, `schemas/json/*`,
 and the conformance fixtures' pinned *expectations* under
 `schemas/conformance/`). No algorithmic code was read from, ported from, or
 shared with `acdp-rs`, and nothing shells out to any Rust binary. The two
@@ -102,6 +102,7 @@ pluggable-store pattern RFC-ACDP-0001 §5.11 recommends).
 | `acdp_verifier.evidence` | The `acdp-evidence/1` schema gate (RFC-ACDP-0017 §4.1: a malformed bundle is rejected whole), plus the closed lifecycle-event, event-receipt and registry-receipt shapes |
 | `acdp_verifier.chain` | `verify_chain` (RFC-ACDP-0017): the deterministic BFS walk with limits, frontier and cycle detection; the as-of and latest passes over §6.2 snapshot selection and §6.3 pinned options; all nine §7 stages incl. §10.3 event-receipt verification and the RFC-ACDP-0014 revocation fold; §8 caveats, verdicts, tainted paths and drift; the §9 verdict object with `verdict_digest` / `as_of_digest`. Reads no wall clock |
 | `acdp_verifier.mcp` | RFC-ACDP-0019 consumer side: the §4.3 hashed result and salted/unsalted call hashes, strict 32-byte base64url salt, and `verify_tool_result`, the five-step holder check of a `CallToolResult` against its `io.acdp/provenance` link (the proxy side is out of scope) |
+| `acdp_verifier.a2a` | RFC-ACDP-0022 holder side (`acdp-consumer-a2a`): §4.2 chunk assembly, the §5.1 normalization of a received Part (nulls and empty `filename`/`mediaType` dropped, `raw` re-encoded to standard padded base64, absent/`ROLE_UNSPECIFIED` role read as `ROLE_AGENT`), the always-salted id hashes and `parts_hash`, the closed `acdp-a2a-artifact/1` record, the Card pointer `https://acdp.io/ext/a2a/v1` and the §3.1 AITP AID ↔ `did:key` binding, and `verify_artifact`, the §8 holder check reporting its failing step and reason; `artifact_status` reads retraction and supersession through the RFC-ACDP-0013/0017 event checks, the retrieval `registry_state` and verified RFC-ACDP-0018 entries (the agent side is out of scope) |
 | `acdp_verifier.trustlist` | RFC-ACDP-0020 consumer side: issuer pins, §5.2 list-version validation (the closed `acdp-trust-list/1` object included), §5.3–§5.4 series state and version selection (floor, rollback, equivocation, issuer-only retraction, as-of), §6.2 body evaluation, and the deterministic `acdp-trust-report/1` (§8), including `chain_trust_report` over an RFC-ACDP-0017 verdict |
 | `acdp_verifier.keyless` | RFC-ACDP-0021 consumer side (`acdp-consumer-keyless`): the closed `acdp-key-attestation/1` object and its §5.3 runtime rules, the RFC 7638 thumbprint, keyless key ids, token hash and §5.1 proof of possession; the controller's `AcdpKeylessSigning` service (§4.1); `verify_keyless`, the §8.1 procedure in its fixed order mapped onto the three existing key statuses (§8.2), with the §9 revocation rules (retraction as a registry-attested revocation at `not_before`, org-wide keyless revocations applied, narrower ones hints, unevaluable ones `unknown`) and the §11 attester policy (none by default); and the §7 supersession table. `didweb` refuses the reserved `acdp-kl-` fragment (§4.2), and `chain` evaluates keyless nodes per §10, with the accepted attesters taken only from `pinned.keyless_attesters` (so `options_digest` covers them) |
 | `acdp_verifier.recall` | RFC-ACDP-0018 consumer side: §7 `verify_change` for `lifecycle` / `superseded` / `key_revocation` entries over the consumer's own retrievals, the §8.2 `ACDP-Signature` HMAC (key = UTF-8 of the secret string), and `check_envelope` (the §7 envelope rule in rec-009's `check_order`, run first by `verify_change`), and a no-I/O `RecallConsumer` (dedupe by authority+seq between resyncs only, cursor after a whole page, resync on `cursor_expired` or on `invalid_cursor` for a persisted cursor, only `has_more: false` is the head, pull from its own cursor on a hint, accept pages up to 1 MiB and retry an oversized one smaller); the §6.1 bucket filters (`change_bucket`, `bucket_params`, `local_match`, and `RecallConsumer.exact` to skip bucket neighbours before verification) |
@@ -168,15 +169,18 @@ applies it automatically in its blame view, but plain `git blame` does not —
 run `git config blame.ignoreRevsFile .git-blame-ignore-revs` once locally to
 get the same effect.
 
-Current conformance status: **130 in-scope fixtures PASS, 0 FAIL, 77 SKIP
-(explicit out-of-scope markers), 207 total** at spec `c40671e` — including every golden vector
+Current conformance status: **138 in-scope fixtures PASS, 0 FAIL, 79 SKIP
+(explicit out-of-scope markers), 217 total** at spec `abf66f8` — including every golden vector
 (`sig-001..004`, `can-001..013`, `lin-001`, `fp-001`, `rcpt-001..006`,
 `rot-001`, `rev-001/002/006/007` (`rev-007`: the 20 RFC-ACDP-0014 §7 classification known answers), `lhr-001..004`, `log-001..005`, `wit-001..005`, `body-003`,
 `anc-001..006`, where `anc-006` runs the `seam.decision` hook against Seam's
 known-answer vectors; the RFC-ACDP-0017 known-answer verdicts `chain-001/002/003/010` and the 27
 cross-implementation edge vectors of `chain-011` reproduced byte for byte; the RFC-ACDP-0019
 consumer side in `mcp-001` (the salted call hashes, `endpoint_hash` and the signed body) and
-`mcp-003` D (the §4.3 holder recompute, each negative at its failing step); the RFC-ACDP-0020
+`mcp-003` D (the §4.3 holder recompute, each negative at its failing step); the RFC-ACDP-0022
+holder side in `a2a-001` (both vectors re-derived byte for byte from the chunks, ids, salt and zero
+seed, both holder positives and all sixteen holder negatives at their pinned reasons) and the
+holder-applicable scenarios of `a2a-002..004` and `a2a-006..008`; the RFC-ACDP-0020
 trust lists in `trust-001` (the golden list, all 20 evaluation rows and the golden trust report)
 and the behavioral `trust-002..007`; the RFC-ACDP-0021 keyless known answers in `kl-001` (the golden
 attestation, keyless-signed body and proof of possession recomputed byte for byte, the 21-case §8.2
