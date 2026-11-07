@@ -1,12 +1,15 @@
 """``did:web`` URL derivation and offline DID-document key resolution.
 
-This module performs NO network I/O. URL derivation follows RFC-ACDP-0001
-§5.11 step 3; key extraction (steps 4-6) operates on caller-supplied DID
-documents (the strict-offline pluggable-store pattern the RFC recommends).
+This module performs NO network I/O. URL derivation and response acceptance
+follow RFC-ACDP-0001 §5.11 step 3; key extraction (steps 4-6) operates on
+caller-supplied DID documents (the strict-offline pluggable-store pattern the
+RFC recommends). A caller that does fetch passes the HTTP response's
+Content-Type and body through :func:`parse_did_document_response`.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
@@ -15,14 +18,21 @@ from urllib.parse import unquote
 
 from .base58 import b58decode
 from .didkey import MULTICODEC_ED25519, MULTICODEC_P256
-from .errors import InvalidSignature, KeyNotAuthorized, KeyResolutionFailed
+from .errors import (
+    InvalidSignature,
+    KeyNotAuthorized,
+    KeyResolutionFailed,
+    KeyResolutionUnreachable,
+)
 
 __all__ = [
+    "DID_DOCUMENT_MEDIA_TYPES",
     "KEYLESS_FRAGMENT_PREFIX",
     "Authorization",
     "ResolvedVerificationMethod",
     "did_web_authority",
     "did_web_url",
+    "parse_did_document_response",
     "resolve_verification_method",
 ]
 
@@ -30,6 +40,10 @@ _B64URL_PAD = {0: "", 2: "==", 3: "="}
 
 # RFC-ACDP-0021 §4.2 / §6.1: the fragment prefix reserved for keyless key ids.
 KEYLESS_FRAGMENT_PREFIX = "acdp-kl-"
+
+
+# RFC-ACDP-0001 §5.11 step 3: the only media types a DID document response may carry.
+DID_DOCUMENT_MEDIA_TYPES = frozenset({"application/did+json", "application/json"})
 
 
 class Authorization(Enum):
@@ -75,6 +89,32 @@ def did_web_url(did: str) -> str:
         return f"https://{authority}/.well-known/did.json"
     path = "/".join(parts[1:])
     return f"https://{authority}/{path}/did.json"
+
+
+def parse_did_document_response(content_type: str | None, body: bytes | str) -> dict[str, Any]:
+    """Accept a fetched DID-document response (RFC-ACDP-0001 §5.11 step 3).
+
+    ``content_type`` is the response's ``Content-Type`` header value (``None``
+    when absent). Its media type, compared case-insensitively with parameters
+    such as ``charset`` ignored, MUST be ``application/did+json`` or
+    ``application/json``; anything else (e.g. ``text/html`` from a misrouted
+    or error page) is a DID fetch failure, :class:`KeyResolutionUnreachable`.
+    A body that is not a JSON object is a permanent failure,
+    :class:`KeyResolutionFailed`. Returns the parsed DID document.
+    """
+    media_type = (content_type or "").split(";", 1)[0].strip().lower()
+    if media_type not in DID_DOCUMENT_MEDIA_TYPES:
+        raise KeyResolutionUnreachable(
+            f"DID document response has Content-Type {content_type!r}; expected "
+            "application/did+json or application/json (RFC-ACDP-0001 §5.11 step 3)"
+        )
+    try:
+        document = json.loads(body)
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise KeyResolutionFailed(f"DID document is not valid JSON: {exc}") from exc
+    if not isinstance(document, dict):
+        raise KeyResolutionFailed("DID document must be a JSON object")
+    return document
 
 
 def _b64url_decode(text: str) -> bytes:

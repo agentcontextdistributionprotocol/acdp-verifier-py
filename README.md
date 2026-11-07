@@ -89,7 +89,7 @@ pluggable-store pattern RFC-ACDP-0001 §5.11 recommends).
 | `acdp_verifier.hashing` | `content_hash` over ProducerContent (§5.7 exclusion-by-name over raw JSON, unknown-field preservation), `lineage_id` derivation (§5.6) |
 | `acdp_verifier.signing` | Ed25519 + ECDSA-P256 (RFC 6979 deterministic signing; IEEE 1363 r‖s wire form, DER rejected) over the ASCII `sha256:<hex>` preimage (§5.8) |
 | `acdp_verifier.didkey` | Pure `did:key` resolution (§5.11.1: multibase/multicodec, Ed25519 `0xed01` + P-256 varint `0x8024`) |
-| `acdp_verifier.didweb` | `did:web` URL derivation (no fetch) + offline verification-method resolution incl. the historical (`verificationMethod`-only) path |
+| `acdp_verifier.didweb` | `did:web` URL derivation (no fetch), DID-document response acceptance (Content-Type + JSON object, §5.11 step 3) + offline verification-method resolution incl. the historical (`verificationMethod`-only) path |
 | `acdp_verifier.fingerprint` | RFC-ACDP-0010 §6 key fingerprints (raw 32-byte Ed25519 / 33-byte SEC1-compressed P-256) |
 | `acdp_verifier.receipts` | Registry-receipt verification, all six §8 steps (RFC-ACDP-0010) |
 | `acdp_verifier.headreceipt` | Lineage-head receipts, all §7 steps incl. 5b and the future-`as_of` skew check (RFC-ACDP-0011) |
