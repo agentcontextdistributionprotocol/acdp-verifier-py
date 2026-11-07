@@ -204,3 +204,37 @@ def test_status_inputs() -> None:
         a2a.artifact_status(CTX, evidence=evidence, changes=[{"ctx_id": "other"}])
         == a2a.ArtifactStatus()
     )
+
+
+def test_retraction_through_retrieval_only() -> None:
+    """#119: §8 step 6 reads retraction from a plain retrieval's registry_state."""
+    body, artifact = _signed(_record())
+    event = cc.make_event(CTX, "retracted", "2026-11-07T00:00:00.000Z", cc.KEY_PRODUCER)
+    receipt = cc.make_event_receipt(event, 0, "2026-11-07T00:00:01.000Z")
+    state = {"status": "retracted", "lifecycle_events": [event], "event_receipts": [receipt]}
+    got = a2a.verify_artifact(
+        body, artifact, trusted_agents={body["agent_id"]}, registry_state=state
+    )
+    assert got.status.retraction == "retracted"
+    assert got.status.superseded is False
+    # The retrieval replaces the held bundle's older view of the same context.
+    held = cc.base_bundle().build()
+    held["contexts"] = {CTX: {"body": body}}
+    got_status = a2a.artifact_status(CTX, registry_state=state, evidence=held, body=body)
+    assert got_status.retraction == "retracted"
+    assert a2a.artifact_status(CTX, evidence=held).retraction == "not_retracted"
+    republished = cc.make_event(CTX, "republished", "2026-11-08T00:00:00.000Z", cc.KEY_PRODUCER)
+    state_back = {"status": "active", "lifecycle_events": [event, republished]}
+    got_status = a2a.artifact_status(CTX, registry_state=state_back, body=body)
+    assert got_status.retraction == "not_retracted"
+    # A forged event signature is not admitted.
+    forged = {**event, "signature": {**event["signature"], "value": cc.b64(bytes(64))}}
+    got_status = a2a.artifact_status(
+        CTX, registry_state={"status": "retracted", "lifecycle_events": [forged]}, body=body
+    )
+    assert got_status.retraction == "not_retracted"
+    # Events need the retrieved body, and it must be the one for ctx_id.
+    with pytest.raises(SchemaViolation):
+        a2a.artifact_status(CTX, registry_state=state)
+    with pytest.raises(SchemaViolation):
+        a2a.artifact_status(CTX, registry_state=state, body={**body, "ctx_id": CTX + "x"})

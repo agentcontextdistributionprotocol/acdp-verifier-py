@@ -2,14 +2,14 @@
 
 An A2A server agent signs one body per completed artifact, under its own DID,
 with the closed ``acdp-a2a-artifact/1`` record at ``metadata["acdp:a2a"]``,
-and returns the link in ``Artifact.metadata["io.acdp/provenance"]``. A holder
+and returns the link in ``Artifact.metadata["io.agentcontextdistributionprotocol/provenance"]``. A holder
 of the artifact and its link runs :func:`verify_artifact`:
 
 1. **Body.** The body verifies per RFC-ACDP-0001 §5.11 and is the one the
    link names (``ctx_id``, ``origin_registry`` = ``registry``,
    ``content_hash``). A ``failed`` link names no body.
 2. **Agent and record.** ``agent_id`` is trusted; when the holder reached the
-   agent through its Card, the ``https://acdp.io/ext/a2a/v1`` pointer's
+   agent through its Card, the ``https://agentcontextdistributionprotocol.io/ext/a2a/v1`` pointer's
    ``agentId`` equals ``agent_id``, and a ``did:key`` agent encodes the Card's
    AITP AID key (§3.1). The record is valid and closed.
 3. **Salt.** The link's salt is the canonical 43-character base64url form.
@@ -18,7 +18,8 @@ of the artifact and its link runs :func:`verify_artifact`:
 5. **Task.** ``task_id_hash``/``context_id_hash`` recompute when the holder
    knows the ids; unknown ids stay unchecked, which is not a mismatch.
 6. **Status.** :func:`artifact_status` reads retraction (RFC-ACDP-0013, via
-   the RFC-ACDP-0017 event machinery) and supersession (retrieval
+   the RFC-ACDP-0017 event machinery, from a bundle or the retrieval's own
+   ``registry_state.lifecycle_events``) and supersession (retrieval
    ``registry_state``), or both from verified RFC-ACDP-0018 feed entries.
 
 The verdict is local (§14: no wire code). :class:`ArtifactMismatch` carries
@@ -42,7 +43,7 @@ from typing import Any
 from .chain import _Pass
 from .didkey import _decode_method_specific_id
 from .errors import AcdpError, SchemaViolation
-from .evidence import EvidenceRejected, validate_evidence
+from .evidence import EVIDENCE_VERSION, EvidenceRejected, validate_evidence
 from .mcp import call_hash, decode_salt
 from .recall import ChangeResult, verify_change
 from .timeutil import is_rfc3339_utc
@@ -80,9 +81,9 @@ __all__ = [
 
 RECORD_VERSION = "acdp-a2a-artifact/1"
 RECORD_MEMBER = "acdp:a2a"
-LINK_KEY = "io.acdp/provenance"
-INPUTS_KEY = "io.acdp/inputs"
-ARTIFACT_EXTENSION_URI = "https://acdp.io/ext/a2a/v1"
+LINK_KEY = "io.agentcontextdistributionprotocol/provenance"
+INPUTS_KEY = "io.agentcontextdistributionprotocol/inputs"
+ARTIFACT_EXTENSION_URI = "https://agentcontextdistributionprotocol.io/ext/a2a/v1"
 AITP_EXTENSION_URI = "https://agentidentitytrustprotocol.io/ext/a2a/v1"
 ROLE_AGENT = "ROLE_AGENT"
 #: §4.1: types whose ``metadata`` is itself an ACDP-defined record.
@@ -150,7 +151,7 @@ class ArtifactMismatch(AcdpError):
 
 @dataclass(frozen=True)
 class CardPointer:
-    """The ``params`` of the one well-formed ``https://acdp.io/ext/a2a/v1`` entry (§9)."""
+    """The ``params`` of the one well-formed ``https://agentcontextdistributionprotocol.io/ext/a2a/v1`` entry (§9)."""
 
     registry: str
     agent_id: str
@@ -416,7 +417,9 @@ def _link_of(artifact: Mapping[str, Any]) -> Mapping[str, Any]:
     link = metadata.get(LINK_KEY) if isinstance(metadata, Mapping) else None
     if not isinstance(link, Mapping):
         raise ArtifactMismatch(
-            "artifact carries no io.acdp/provenance link", step=1, reason="link_failed"
+            "artifact carries no io.agentcontextdistributionprotocol/provenance link",
+            step=1,
+            reason="link_failed",
         )
     if link.get("failed") is True:
         raise ArtifactMismatch("a failed link names no body", step=1, reason="link_failed")
@@ -446,7 +449,7 @@ def verify_artifact(
     """Run RFC-ACDP-0022 §8 over a retrieved *body* and the held *artifact*.
 
     *artifact* is the A2A ``Artifact`` as held (A2A JSON), carrying the link in
-    ``metadata["io.acdp/provenance"]``. *card_extensions* is
+    ``metadata["io.agentcontextdistributionprotocol/provenance"]``. *card_extensions* is
     ``capabilities.extensions`` of the Agent Card the holder reached the agent
     through, if it did. *task_id*/*context_id* run step 5 when known. The
     status inputs are passed to :func:`artifact_status` (step 6).
@@ -558,7 +561,11 @@ def verify_artifact(
 
     # Step 6: status, as the holder's own retrievals and feed say.
     status = artifact_status(
-        str(body["ctx_id"]), registry_state=registry_state, evidence=evidence, changes=changes
+        str(body["ctx_id"]),
+        registry_state=registry_state,
+        evidence=evidence,
+        changes=changes,
+        body=body,
     )
     return ArtifactVerification(
         body=verified,
@@ -573,17 +580,48 @@ def verify_artifact(
     )
 
 
+def _with_retrieval(
+    ctx_id: str,
+    registry_state: Mapping[str, Any],
+    body: Mapping[str, Any] | None,
+    evidence: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """*evidence* (or an empty bundle) holding the retrieval's events for *ctx_id*."""
+    if body is None:
+        raise SchemaViolation("retrieval lifecycle_events are verified only against its body")
+    if body.get("ctx_id") != ctx_id:
+        raise SchemaViolation("the retrieved body is not the one for this ctx_id")
+    entry: dict[str, Any] = {
+        "body": body,
+        "lifecycle_events": registry_state["lifecycle_events"],
+    }
+    if registry_state.get("event_receipts"):
+        entry["event_receipts"] = registry_state["event_receipts"]
+    bundle: dict[str, Any] = (
+        dict(evidence) if evidence is not None else {"evidence_version": EVIDENCE_VERSION}
+    )
+    contexts = bundle.get("contexts")
+    bundle["contexts"] = {**(contexts if isinstance(contexts, Mapping) else {}), ctx_id: entry}
+    return bundle
+
+
 def artifact_status(
     ctx_id: str,
     *,
     registry_state: Mapping[str, Any] | None = None,
     evidence: Mapping[str, Any] | None = None,
     changes: Sequence[Mapping[str, Any]] = (),
+    body: Mapping[str, Any] | None = None,
 ) -> ArtifactStatus:
     """§8 step 6: retraction and supersession, from the holder's own inputs.
 
     * *registry_state* — the retrieval's ``registry_state``: ``superseded``
-      status is supersession through retrieval (RFC-ACDP-0003).
+      status is supersession through retrieval (RFC-ACDP-0003). Its
+      ``lifecycle_events``/``event_receipts``, when present, are retraction
+      through RFC-ACDP-0013: they are checked against the retrieved *body*
+      through the same RFC-ACDP-0017 event checks as a bundle's, with any
+      DID documents *evidence* holds. The retrieval is the fresher view, so
+      it replaces *evidence*'s own entry for *ctx_id*.
     * *evidence* — an ``acdp-evidence/1`` bundle holding the body with its
       ``lifecycle_events``/``event_receipts``: the RFC-ACDP-0013 retraction
       state, through the RFC-ACDP-0017 event checks.
@@ -603,6 +641,8 @@ def artifact_status(
         superseded = registry_state.get("status") == "superseded"
         by = registry_state.get("superseded_by")
         superseded_by = by if superseded and isinstance(by, str) else None
+        if registry_state.get("lifecycle_events"):
+            evidence = _with_retrieval(ctx_id, registry_state, body, evidence)
     if evidence is not None:
         try:
             validate_evidence(evidence)

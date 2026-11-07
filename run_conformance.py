@@ -91,7 +91,7 @@ SKIP_KEYLESS_REGISTRY = (
 )
 SKIP_A2A_PRODUCER = (
     "out-of-scope: producer profile (acdp-producer-a2a, RFC-ACDP-0022 Draft). "
-    "How an agent fills derived_from from io.acdp/inputs (§7) has no holder side; "
+    "How an agent fills derived_from from io.agentcontextdistributionprotocol/inputs (§7) has no holder side; "
     "this verifier runs no agent. a2a-001 re-derives its derived_from known answer"
 )
 SKIP_DID_FETCH = (
