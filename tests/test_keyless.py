@@ -224,6 +224,31 @@ def test_attestation_body_rules(over: dict[str, Any]) -> None:
         keyless.validate_attestation_body(_attestation_body(**over))
 
 
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "https://schemas.agentcontextdistributionprotocol.io/v0.1.0/acdp-key-attestation.schema.json",
+        "https://schemas.acdp.io/v0.1.0/acdp-key-attestation.schema.json",
+    ],
+)
+def test_attestation_schema_uri_new_and_legacy_accepted(uri: str) -> None:
+    """§5.3: verifiers accept the long-form URI and the earlier acdp.io one."""
+    keyless.validate_attestation_body(_attestation_body(schema_uri=uri))
+
+
+def test_attestation_schema_uri_minted_value_is_the_new_one() -> None:
+    assert keyless.ATTESTATION_SCHEMA_URI.startswith(
+        "https://schemas.agentcontextdistributionprotocol.io/"
+    )
+    for near_miss in (
+        "http://schemas.acdp.io/v0.1.0/acdp-key-attestation.schema.json",
+        "https://schemas.acdp.io/v0.2.0/acdp-key-attestation.schema.json",
+        None,
+    ):
+        with pytest.raises(keyless.AttestationInvalid):
+            keyless.validate_attestation_body(_attestation_body(schema_uri=near_miss))
+
+
 # --- §6.2: the key_attestation field -------------------------------------------------
 
 

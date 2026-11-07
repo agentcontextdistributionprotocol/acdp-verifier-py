@@ -57,11 +57,13 @@ from .validation import (
 from .verify import verify_context_body, verify_producer_signature
 
 __all__ = [
+    "ACCEPTED_ATTESTATION_SCHEMA_URIS",
     "ATTESTATION_SCHEMA_URI",
     "ATTESTATION_TYPE",
     "ATTESTATION_VERSION",
     "CONTROLLER_SIGNER",
     "KEYLESS_FRAGMENT_PREFIX",
+    "LEGACY_ATTESTATION_SCHEMA_URI",
     "POP_VERSION",
     "SERVICE_TYPE",
     "AppliedRevocation",
@@ -98,6 +100,13 @@ ATTESTATION_TYPE = "acdp:key-attestation"
 ATTESTATION_VERSION = "acdp-key-attestation/1"
 ATTESTATION_SCHEMA_URI = (
     "https://schemas.agentcontextdistributionprotocol.io/v0.1.0/acdp-key-attestation.schema.json"
+)
+# RFC-ACDP-0021 §5.3: registries mint only ATTESTATION_SCHEMA_URI, but a
+# verifier (§6.3 step 3, §8.1 step 1) also accepts the pre-long-form-domain
+# value, which attestations stored before the move carry (bodies are immutable).
+LEGACY_ATTESTATION_SCHEMA_URI = "https://schemas.acdp.io/v0.1.0/acdp-key-attestation.schema.json"
+ACCEPTED_ATTESTATION_SCHEMA_URIS = frozenset(
+    {ATTESTATION_SCHEMA_URI, LEGACY_ATTESTATION_SCHEMA_URI}
 )
 POP_VERSION = "acdp-key-attestation-pop/1"
 SERVICE_TYPE = "AcdpKeylessSigning"
@@ -414,7 +423,7 @@ def validate_attestation_body(body: Mapping[str, Any]) -> Attestation:
         raise AttestationInvalid("an attestation is version 1 with supersedes null")
     if body.get("data_refs") != [] or body.get("derived_from") != []:
         raise AttestationInvalid("an attestation has empty data_refs and derived_from")
-    if body.get("schema_uri") != ATTESTATION_SCHEMA_URI:
+    if body.get("schema_uri") not in ACCEPTED_ATTESTATION_SCHEMA_URIS:
         raise AttestationInvalid(f"schema_uri is not {ATTESTATION_SCHEMA_URI!r}")
     acdp_version = body.get("acdp_version")
     try:
