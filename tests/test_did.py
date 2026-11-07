@@ -10,7 +10,6 @@ from acdp_verifier.errors import (
     InvalidSignature,
     KeyNotAuthorized,
     KeyResolutionFailed,
-    KeyResolutionUnreachable,
 )
 
 SIG003_PUBLIC = bytes.fromhex("2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12")
@@ -209,13 +208,13 @@ class TestDidDocumentResponse:
         "content_type",
         ["text/html", "text/html; charset=utf-8", "text/plain", "application/ld+json", "", None],
     )
-    def test_rejected_media_types_are_fetch_failures(self, content_type: str | None) -> None:
-        with pytest.raises(KeyResolutionUnreachable) as exc_info:
+    def test_rejected_media_types_are_permanent(self, content_type: str | None) -> None:
+        with pytest.raises(KeyResolutionFailed) as exc_info:
             didweb.parse_did_document_response(content_type, self.BODY)
-        assert exc_info.value.code == "key_resolution_unreachable"
+        assert exc_info.value.code == "key_resolution_failed"
 
     def test_html_body_rejected_on_content_type_before_parse(self) -> None:
-        with pytest.raises(KeyResolutionUnreachable):
+        with pytest.raises(KeyResolutionFailed):
             didweb.parse_did_document_response("text/html", b"<html>not found</html>")
 
     def test_json_parse_error_is_permanent(self) -> None:

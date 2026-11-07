@@ -18,12 +18,7 @@ from urllib.parse import unquote
 
 from .base58 import b58decode
 from .didkey import MULTICODEC_ED25519, MULTICODEC_P256
-from .errors import (
-    InvalidSignature,
-    KeyNotAuthorized,
-    KeyResolutionFailed,
-    KeyResolutionUnreachable,
-)
+from .errors import InvalidSignature, KeyNotAuthorized, KeyResolutionFailed
 
 __all__ = [
     "DID_DOCUMENT_MEDIA_TYPES",
@@ -97,14 +92,14 @@ def parse_did_document_response(content_type: str | None, body: bytes | str) -> 
     ``content_type`` is the response's ``Content-Type`` header value (``None``
     when absent). Its media type, compared case-insensitively with parameters
     such as ``charset`` ignored, MUST be ``application/did+json`` or
-    ``application/json``; anything else (e.g. ``text/html`` from a misrouted
-    or error page) is a DID fetch failure, :class:`KeyResolutionUnreachable`.
-    A body that is not a JSON object is a permanent failure,
-    :class:`KeyResolutionFailed`. Returns the parsed DID document.
+    ``application/json``. Anything else, including a missing header or e.g.
+    ``text/html`` from a misrouted or error page, is a permanent failure,
+    :class:`KeyResolutionFailed`, as is a body that is not a JSON object.
+    Returns the parsed DID document.
     """
     media_type = (content_type or "").split(";", 1)[0].strip().lower()
     if media_type not in DID_DOCUMENT_MEDIA_TYPES:
-        raise KeyResolutionUnreachable(
+        raise KeyResolutionFailed(
             f"DID document response has Content-Type {content_type!r}; expected "
             "application/did+json or application/json (RFC-ACDP-0001 §5.11 step 3)"
         )

@@ -81,9 +81,8 @@ class KeyResolutionUnreachable(AcdpError):
     """Transient DID fetch failure (RFC-ACDP-0001 §5.11 step 3, HTTP 502).
 
     The DID document could not be obtained: network or upstream-availability
-    failure, a non-2xx response, or a response that is not served as a DID
-    document (Content-Type other than ``application/did+json`` or
-    ``application/json``). Typically retryable.
+    failure or a non-2xx response. Typically retryable. (A response with the
+    wrong Content-Type is permanent, :class:`KeyResolutionFailed`.)
     """
 
     code = "key_resolution_unreachable"
