@@ -1,6 +1,6 @@
 """MCP tool-result provenance, consumer side (RFC-ACDP-0019 §4.3, §6).
 
-A holder of a ``CallToolResult`` and its ``io.acdp/provenance`` value checks
+A holder of a ``CallToolResult`` and its ``io.agentcontextdistributionprotocol/provenance`` value checks
 that the retrieved ``acdp:mcp-tool-result`` body records exactly that result:
 
 1. the body verifies per RFC-ACDP-0001 §5.11, and its ``content_hash`` equals
@@ -45,7 +45,7 @@ __all__ = [
 
 RECORD_TYPE = "acdp:mcp-tool-result"
 RECORD_VERSION = "acdp-mcp-tool-result/1"
-PROVENANCE_META_KEY = "io.acdp/provenance"
+PROVENANCE_META_KEY = "io.agentcontextdistributionprotocol/provenance"
 
 _SALT_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 _HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -169,7 +169,10 @@ def verify_tool_result(
     meta = result.get("_meta")
     provenance = meta.get(PROVENANCE_META_KEY) if isinstance(meta, Mapping) else None
     if not isinstance(provenance, Mapping) or provenance.get("failed") is True:
-        raise ProvenanceMismatch("result carries no published io.acdp/provenance link", step=1)
+        raise ProvenanceMismatch(
+            "result carries no published io.agentcontextdistributionprotocol/provenance link",
+            step=1,
+        )
 
     # Step 1: the body verifies as any body, and is the one the link names.
     verified = verify_context_body(body, did_documents=did_documents)

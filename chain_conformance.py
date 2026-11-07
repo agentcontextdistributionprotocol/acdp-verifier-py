@@ -1833,7 +1833,7 @@ def run_a2a_003(fixture: Mapping[str, Any], spec_dir: Path) -> None:
     for uri in (
         a2a.ARTIFACT_EXTENSION_URI + "/",
         a2a.ARTIFACT_EXTENSION_URI.upper(),
-        "http://acdp.io/ext/a2a/v1",
+        "http://agentcontextdistributionprotocol.io/ext/a2a/v1",
     ):
         check(a2a.card_pointer([{**acdp_entry, "uri": uri}]) is None, f"D: {uri} is not the URI")
     # E — two entries, or params missing agentId: no pointer, holder proceeds.
@@ -2033,6 +2033,13 @@ def run_a2a_004(fixture: Mapping[str, Any], spec_dir: Path) -> None:
     _expect(
         "H: retracted (re-retrieved)",
         _a2a_holder(v1, evidence=retrieved).status.retraction,
+        "retracted",
+    )
+    # #119: the same events read from a plain retrieval's registry_state.
+    state = {"status": "retracted", "lifecycle_events": [event], "event_receipts": [receipt]}
+    _expect(
+        "H: retracted through retrieval",
+        _a2a_holder(v1, registry_state=state).status.retraction,
         "retracted",
     )
     entry = _lifecycle_entry(2202, body["ctx_id"], body, event, receipt)

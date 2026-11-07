@@ -96,7 +96,9 @@ __all__ = [
 
 ATTESTATION_TYPE = "acdp:key-attestation"
 ATTESTATION_VERSION = "acdp-key-attestation/1"
-ATTESTATION_SCHEMA_URI = "https://schemas.acdp.io/v0.1.0/acdp-key-attestation.schema.json"
+ATTESTATION_SCHEMA_URI = (
+    "https://schemas.agentcontextdistributionprotocol.io/v0.1.0/acdp-key-attestation.schema.json"
+)
 POP_VERSION = "acdp-key-attestation-pop/1"
 SERVICE_TYPE = "AcdpKeylessSigning"
 MIN_ACDP_VERSION = "0.5.0"
