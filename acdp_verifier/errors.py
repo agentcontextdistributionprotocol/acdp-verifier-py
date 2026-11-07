@@ -19,6 +19,7 @@ __all__ = [
     "InvalidWitnessCosignature",
     "KeyNotAuthorized",
     "KeyResolutionFailed",
+    "KeyResolutionUnreachable",
     "SchemaViolation",
     "ValidationError",
 ]
@@ -74,6 +75,18 @@ class KeyResolutionFailed(AcdpError):
     """Permanent key-resolution failure (RFC-ACDP-0001 §5.11 / §5.11.1)."""
 
     code = "key_resolution_failed"
+
+
+class KeyResolutionUnreachable(AcdpError):
+    """Transient DID fetch failure (RFC-ACDP-0001 §5.11 step 3, HTTP 502).
+
+    The DID document could not be obtained: network or upstream-availability
+    failure, a non-2xx response, or a response that is not served as a DID
+    document (Content-Type other than ``application/did+json`` or
+    ``application/json``). Typically retryable.
+    """
+
+    code = "key_resolution_unreachable"
 
 
 class KeyNotAuthorized(AcdpError):
